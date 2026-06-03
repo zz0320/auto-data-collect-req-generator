@@ -4,14 +4,16 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>需求町工坊</title>
+    <link rel="icon" type="image/png" href="/assets/demand-logo.png?v=2" />
+    <link rel="apple-touch-icon" href="/assets/demand-logo.png?v=2" />
     <link rel="stylesheet" href="/styles.css" />
   </head>
   <body>
     <div class="app-shell">
       <header class="topbar">
         <div class="brand-lockup">
-          <div class="pixel-badge" aria-hidden="true">
-            <span></span><span></span><span></span><span></span>
+          <div class="brand-logo" aria-hidden="true">
+            <img src="/assets/demand-logo.png" alt="" />
           </div>
           <div>
             <h1>需求町工坊</h1>
@@ -69,6 +71,7 @@
           <div class="guide-note">
             <strong>生成原则</strong>
             <p>系统只根据已配置的机器人能力生成需求；不具备移动、全身、双臂或灵巧能力时，对应任务会被拒绝。</p>
+            <p>存量表会整理成字段、动作词表、设备/场景分布和样例片段，作为资源包输入 Qwen。</p>
           </div>
         </aside>
 
@@ -178,24 +181,31 @@
                   </span>
                 </label>
               </div>
-              <label class="field tall-field">
-                <span>Task idea</span>
-                <textarea id="taskIdeas" rows="8">桌面垃圾清理
-餐具摆放
-电池入槽
-超市货架取放</textarea>
-                <small id="ideaStatus" class="field-help" aria-live="polite">每行一个 idea，可手动编辑。</small>
-              </label>
               <div class="control-grid">
                 <label class="field">
-                  <span>本次输出需求条数</span>
-                  <input id="generationTaskCount" type="number" min="1" max="200" value="12" />
-                  <small class="field-help">控制本次生成几条需求，不是目标次数。</small>
+                  <span>想生成多少类 idea/任务</span>
+                  <input id="ideaPlanCount" type="number" min="1" max="200" value="16" />
+                  <small class="field-help">Qwen 自动脑洞会按这个数量生成 idea 行。</small>
                 </label>
                 <label class="field">
                   <span>单任务目标次数上限</span>
                   <input id="targetTimesLimit" type="number" value="60" readonly />
                   <small id="phaseLimitText" class="field-help">预训练任务：目标次数最多 60 次</small>
+                </label>
+              </div>
+              <label class="field tall-field">
+                <span>任务 idea（每行一条）</span>
+                <textarea id="taskIdeas" rows="8">桌面垃圾清理
+餐具摆放
+电池入槽
+超市货架取放</textarea>
+                <small id="ideaStatus" class="field-help" aria-live="polite">已识别 4 个 idea，本次输出需求条数自动匹配。</small>
+              </label>
+              <div class="control-grid">
+                <label class="field">
+                  <span>本次输出需求条数</span>
+                  <input id="generationTaskCount" type="number" min="0" max="200" value="4" readonly />
+                  <small class="field-help">自动等于有效 idea 行数，不是目标次数。</small>
                 </label>
                 <label class="field">
                   <span>数采负责人</span>

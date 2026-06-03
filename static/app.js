@@ -32,6 +32,7 @@ const taskPhaseInputs = [...document.querySelectorAll('input[name="taskPhase"]')
 
 const controls = {
   taskIdeas: document.querySelector("#taskIdeas"),
+  ideaPlanCount: document.querySelector("#ideaPlanCount"),
   generationTaskCount: document.querySelector("#generationTaskCount"),
   ownerHint: document.querySelector("#ownerHint"),
   qwenModel: document.querySelector("#qwenModel"),
@@ -86,6 +87,19 @@ function splitIdeas() {
     .split(/[\n；;]+/)
     .map((item) => item.trim().replace(/^[-\s]+/, ""))
     .filter(Boolean);
+}
+
+function syncGenerationCountWithIdeas(message = "") {
+  const count = splitIdeas().length;
+  controls.generationTaskCount.value = String(count);
+  if (ideaStatus && !ideaBusy) {
+    ideaStatus.textContent = message || `已识别 ${count} 个 idea，本次输出需求条数自动匹配。`;
+  }
+  return count;
+}
+
+function plannedIdeaCount() {
+  return Number(controls.ideaPlanCount.value || 0);
 }
 
 function currentQwenModel() {
@@ -153,12 +167,6 @@ function syncPhaseControls({ clamp = true } = {}) {
     node.classList.toggle("active", input?.value === phaseKey && input.checked);
   });
   controls.generationTaskCount.max = String(maxGenerationTaskCount);
-  if (clamp && controls.generationTaskCount.value) {
-    const current = Number(controls.generationTaskCount.value);
-    if (Number.isFinite(current) && current > maxGenerationTaskCount) {
-      controls.generationTaskCount.value = String(maxGenerationTaskCount);
-    }
-  }
 }
 
 function robotDisplayName(robot) {
@@ -267,7 +275,8 @@ function collectPayload() {
     robots: collectRobots(),
     taskIdeas: controls.taskIdeas.value,
     taskPhase: currentTaskPhase(),
-    generationTaskCount: Number(controls.generationTaskCount.value || 0),
+    generationTaskCount: splitIdeas().length,
+    matchIdeaCount: true,
     qwenModel: currentQwenModel(),
     qwenEndpoint: controls.qwenEndpoint.value.trim(),
     sendFeishu: controls.sendFeishu.checked,
@@ -334,10 +343,10 @@ function validateStep(step) {
     if (invalid) return "机器人名称和可操作末端执行器都必须填写。";
   }
   if (step === 2) {
-    if (!splitIdeas().length) return "至少输入一个任务 idea。";
-    const count = Number(controls.generationTaskCount.value || 0);
+    const count = splitIdeas().length;
+    if (!count) return "至少输入一个任务 idea。";
     if (!Number.isInteger(count) || count < 1 || count > maxGenerationTaskCount) {
-      return `本次输出需求条数必须在 1 到 ${maxGenerationTaskCount} 之间；这不是目标次数。`;
+      return `有效 idea 行数必须在 1 到 ${maxGenerationTaskCount} 之间；本次输出需求条数会自动匹配。`;
     }
   }
   if (step === 3 && controls.sendFeishu.checked && !controls.feishuWebhook.value.trim()) {
@@ -426,7 +435,7 @@ function updateReviewSummary() {
   const robots = collectRobots();
   const ideas = splitIdeas();
   const phase = currentPhaseConfig();
-  const generationCount = Number(controls.generationTaskCount.value || 0);
+  const generationCount = ideas.length;
   const maxTargetTimes = Number(phase.maxTargetTimes || 60);
   reviewSummary.innerHTML = `
     <div class="summary-card">
@@ -445,7 +454,7 @@ function updateReviewSummary() {
       <strong>任务构想</strong>
       <small>${escapeHtml(phase.label)}任务，${ideas.length} 个 idea，本次输出 ${
         generationCount || 0
-      } 条需求；单任务目标次数最多 ${maxTargetTimes} 次。</small>
+      } 条需求；输出条数与 idea 行数匹配，单任务目标次数最多 ${maxTargetTimes} 次。</small>
       <ul>
         ${ideas.slice(0, 6).map((idea) => `<li>${escapeHtml(idea)}</li>`).join("")}
       </ul>
@@ -588,9 +597,9 @@ async function handleBrainstormIdeas() {
     return;
   }
   const phase = currentPhaseConfig();
-  const generationCount = Number(controls.generationTaskCount.value || 0);
-  if (!Number.isInteger(generationCount) || generationCount < 1 || generationCount > maxGenerationTaskCount) {
-    renderNotices([`本次输出需求条数必须在 1 到 ${maxGenerationTaskCount} 之间；这不是目标次数。`]);
+  const ideaCount = plannedIdeaCount();
+  if (!Number.isInteger(ideaCount) || ideaCount < 1 || ideaCount > maxGenerationTaskCount) {
+    renderNotices([`想生成的 idea/任务数量必须在 1 到 ${maxGenerationTaskCount} 之间。`]);
     return;
   }
   setIdeaBusy(true);
@@ -601,17 +610,15 @@ async function handleBrainstormIdeas() {
       body: JSON.stringify({
         robots: collectRobots(),
         taskPhase: currentTaskPhase(),
-        generationTaskCount: generationCount,
-        ideaCount: currentTaskPhase() === "pretrain" ? 18 : 36,
+        generationTaskCount: ideaCount,
+        ideaCount,
         qwenModel: currentQwenModel(),
         qwenEndpoint: controls.qwenEndpoint.value.trim(),
       }),
     });
     const ideas = payload.ideas || [];
     controls.taskIdeas.value = ideas.join("\n");
-    if (ideaStatus) {
-      ideaStatus.textContent = `${payload.phaseLabel || phase.label}返回 ${ideas.length} 个 idea，可继续手动删改。`;
-    }
+    syncGenerationCountWithIdeas(`${payload.phaseLabel || phase.label}返回 ${ideas.length} 个 idea，本次输出需求条数已自动匹配。`);
     renderNotices([
       payload.rationale
         ? `Qwen 已生成 ${ideas.length} 个 idea：${payload.rationale}`
@@ -670,7 +677,11 @@ generateBtn.addEventListener("click", handleGenerate);
 brainstormIdeasBtn.addEventListener("click", handleBrainstormIdeas);
 testFeishuBtn.addEventListener("click", handleFeishuTest);
 controls.taskIdeas.addEventListener("input", () => {
+  syncGenerationCountWithIdeas();
   updateReviewSummary();
+  updateNav();
+});
+controls.ideaPlanCount.addEventListener("input", () => {
   updateNav();
 });
 controls.generationTaskCount.addEventListener("input", () => {
@@ -702,6 +713,7 @@ controls.feishuWebhook.addEventListener("input", updateNav);
 
 syncPhaseControls({ clamp: false });
 syncQwenModelCustom();
+syncGenerationCountWithIdeas();
 initialRobots.forEach(addRobot);
 showStep(0);
 loadSchema();

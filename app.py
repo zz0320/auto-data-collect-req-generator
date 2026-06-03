@@ -1029,8 +1029,8 @@ def brainstorm_ideas_response(body: dict[str, Any]) -> dict[str, Any]:
     api_key = os.getenv("DASHSCOPE_API_KEY", "").strip()
     if not api_key:
         raise ValueError("服务未配置 DASHSCOPE_API_KEY，无法调用 Qwen 自动脑洞")
-    idea_count = int(float(body.get("ideaCount") or (18 if task_phase == "pretrain" else 36)))
-    idea_count = max(6, min(idea_count, 60))
+    idea_count = int(float(body.get("ideaCount") or generation_count or (18 if task_phase == "pretrain" else 36)))
+    idea_count = max(1, min(idea_count, MAX_GENERATED_TASKS_PER_REQUEST))
     model = str(body.get("qwenModel") or DEFAULT_QWEN_MODEL).strip() or DEFAULT_QWEN_MODEL
     endpoint = str(body.get("qwenEndpoint") or DEFAULT_QWEN_ENDPOINT).strip() or DEFAULT_QWEN_ENDPOINT
     robot_text = "\n".join(
@@ -1120,7 +1120,11 @@ def generation_response(body: dict[str, Any]) -> dict[str, Any]:
     phase = TASK_PHASES[task_phase]
     max_target_times = int(phase["maxTargetTimes"])
     fallback_count = int(body.get("countPerRobot") or 3) * max(len(robots), 1)
-    generation_task_count = int(float(body.get("generationTaskCount") or body.get("targetTaskCount") or fallback_count))
+    match_idea_count = parse_bool(body.get("matchIdeaCount", True))
+    if match_idea_count and ideas:
+        generation_task_count = len(ideas)
+    else:
+        generation_task_count = int(float(body.get("generationTaskCount") or body.get("targetTaskCount") or fallback_count))
     if generation_task_count < 1:
         raise ValueError("本次输出需求条数必须大于 0")
     if generation_task_count > MAX_GENERATED_TASKS_PER_REQUEST:
