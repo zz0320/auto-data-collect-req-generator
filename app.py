@@ -1281,6 +1281,7 @@ def qwen_prompt(
 8. 同一批内任务名称不能重复；不同机器人之间要结合各自能力差异，不要机械复制同一任务。
 9. 任务简述不要写【预训练】或【后训练】；任务名称必须以“{task_name_phase_prefix(task_phase)}”开头。
 10. 优先参考 RAG 样例的采集设备、场景域、动作标签和步骤粒度；禁止简单复制历史任务名称和步骤。
+11. 严禁生成与存量需求重复或近似重复的任务；任务名称、采集设备、任务简述和步骤组合不得与 RAG 样例一致。如 idea 与历史任务接近，必须更换对象、场景约束或动作组合后再生成。
 
 输出 JSON schema：
 {{
@@ -1566,8 +1567,96 @@ def validate_task(row: dict[str, Any], robots: list[RobotProfile], serial: int, 
     }
 
 
-def validate_tasks(rows: list[dict[str, Any]], robots: list[RobotProfile], task_phase: str) -> list[dict[str, Any]]:
-    return [validate_task(row, robots, index, task_phase) for index, row in enumerate(rows, start=1)]
+def normalize_duplicate_text(value: Any) -> str:
+    text = str(value or "").strip().lower()
+    return "".join(char for char in text if char.isalnum())
+
+
+def normalize_duplicate_task_name(value: Any) -> str:
+    text = str(value or "").strip().lower()
+    match = re.match(r"^(?:预训练|后训练|pretrain|posttrain)\s*[-_：:、]?\s*(.+)$", text, flags=re.I)
+    if match:
+        return normalize_duplicate_text(match.group(1))
+    match = re.match(r"^[预后]\s*[-_：:、]\s*(.+)$", text)
+    if match:
+        return normalize_duplicate_text(match.group(1))
+    return normalize_duplicate_text(text)
+
+
+def duplicate_requirement_keys(row: dict[str, Any]) -> set[tuple[str, ...]]:
+    name = normalize_duplicate_task_name(row.get("任务名称"))
+    device = normalize_duplicate_text(row.get("采集设备"))
+    brief = normalize_duplicate_text(row.get("任务简述"))
+    steps = normalize_duplicate_text(row.get("任务步骤描述"))
+    keys: set[tuple[str, ...]] = set()
+    if name:
+        keys.add(("name", name))
+    if name and device:
+        keys.add(("name_device", device, name))
+    if name and steps:
+        keys.add(("name_steps", name, steps))
+    if device and steps:
+        keys.add(("device_steps", device, steps))
+    if device and brief and steps:
+        keys.add(("content_device", device, brief, steps))
+    return keys
+
+
+def duplicate_requirement_label(row: dict[str, Any]) -> str:
+    name = str(row.get("任务名称") or "").strip() or "未命名需求"
+    device = str(row.get("采集设备") or "").strip()
+    return f"{name} / {device}" if device else name
+
+
+def build_duplicate_requirement_index(rows: list[dict[str, Any]] | None) -> dict[tuple[str, ...], str]:
+    index: dict[tuple[str, ...], str] = {}
+    for row in rows or []:
+        if not isinstance(row, dict):
+            continue
+        label = duplicate_requirement_label(row)
+        for key in duplicate_requirement_keys(row):
+            index.setdefault(key, label)
+    return index
+
+
+def duplicate_errors_for_row(
+    row: dict[str, Any],
+    existing_index: dict[tuple[str, ...], str],
+    batch_index: dict[tuple[str, ...], str],
+) -> tuple[list[str], set[tuple[str, ...]]]:
+    keys = duplicate_requirement_keys(row)
+    errors: list[str] = []
+    existing_matches = sorted({existing_index[key] for key in keys if key in existing_index})
+    if existing_matches:
+        errors.append(f"与存量需求重复：{'；'.join(existing_matches[:3])}")
+    batch_matches = sorted({batch_index[key] for key in keys if key in batch_index})
+    if batch_matches:
+        errors.append(f"与本次已生成需求重复：{'；'.join(batch_matches[:3])}")
+    return errors, keys
+
+
+def validate_tasks(
+    rows: list[dict[str, Any]],
+    robots: list[RobotProfile],
+    task_phase: str,
+    existing_requirements: list[dict[str, Any]] | None = None,
+) -> list[dict[str, Any]]:
+    existing_index = build_duplicate_requirement_index(existing_requirements)
+    batch_index: dict[tuple[str, ...], str] = {}
+    validations: list[dict[str, Any]] = []
+    for index, row in enumerate(rows, start=1):
+        item = validate_task(row, robots, index, task_phase)
+        duplicate_errors, duplicate_keys = duplicate_errors_for_row(item["row"], existing_index, batch_index)
+        for error in duplicate_errors:
+            if error not in item["errors"]:
+                item["errors"].append(error)
+        if duplicate_errors:
+            item["status"] = "rejected"
+        label = duplicate_requirement_label(item["row"])
+        for key in duplicate_keys:
+            batch_index.setdefault(key, label)
+        validations.append(item)
+    return validations
 
 
 def write_xlsx(validations: list[dict[str, Any]], robots: list[RobotProfile], output_dir: Path | None = None) -> Path:
@@ -1708,7 +1797,7 @@ def brainstorm_ideas_response(
 1. 每个 idea 是短句，不写完整步骤，不写编号。
 2. idea 必须符合至少一台机器人的实际能力；固定工位不要提出跨房间/巡检/货架往返 idea。
 3. 预训练 idea 偏底层技能覆盖和对象泛化；后训练 idea 偏复杂约束、多对象、多场景指令。
-4. 避免和示例任务完全同名，但可以在场景和对象上合理扩展。
+4. 不要提出与示例任务同名或内容近似重复的 idea；若场景相近，必须更换对象、约束、动作组合或评价目标。
 5. 覆盖不同场景域，优先补足存量数据中相对少的场景。
 
 输出 JSON schema：
@@ -1802,7 +1891,8 @@ def generation_response(
     except (HTTPError, URLError, TimeoutError, ValueError, json.JSONDecodeError) as exc:
         raise ValueError(f"Qwen 调用失败，未生成数据需求：{exc}") from exc
 
-    validations = validate_tasks(generated_rows, robots, task_phase)
+    existing_requirements = workspace_state.rag_documents if workspace_state else None
+    validations = validate_tasks(generated_rows, robots, task_phase, existing_requirements=existing_requirements)
     accepted_count = sum(1 for item in validations if item["status"] == "accepted")
     rejected_count = len(validations) - accepted_count
 
@@ -1838,7 +1928,14 @@ def export_response(
     if not isinstance(rows, list) or not rows:
         raise ValueError("没有可导出的需求，请先生成需求")
     task_phase = parse_task_phase(body.get("taskPhase"))
-    validations = validate_tasks([row for row in rows if isinstance(row, dict)], robots, task_phase)
+    workspace_state = workspace_state_for(current_user, workspace_manager)
+    existing_requirements = workspace_state.rag_documents if workspace_state else None
+    validations = validate_tasks(
+        [row for row in rows if isinstance(row, dict)],
+        robots,
+        task_phase,
+        existing_requirements=existing_requirements,
+    )
     if not validations:
         raise ValueError("没有可导出的有效需求行")
     accepted_count = sum(1 for item in validations if item["status"] == "accepted")
