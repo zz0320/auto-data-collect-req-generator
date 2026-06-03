@@ -3,7 +3,6 @@ from __future__ import annotations
 import json
 import os
 import re
-import uuid
 from collections import Counter
 from dataclasses import dataclass
 from datetime import datetime
@@ -723,6 +722,24 @@ def clean_task_name(text: str) -> str:
     return text[:24] or "任务"
 
 
+def task_name_phase_prefix(task_phase: str) -> str:
+    return "后-" if parse_task_phase(task_phase) == "posttrain" else "预-"
+
+
+def normalize_task_name_phase(value: Any, task_phase: str) -> str:
+    text = str(value or "").strip()
+    text = re.sub(r"^(?:[【\[]?(?:预训练|后训练)[】\]]?\s*[:：、-]?\s*)+", "", text)
+    text = re.sub(r"^(?:预-|后-)+", "", text).strip()
+    return f"{task_name_phase_prefix(task_phase)}{text}" if text else text
+
+
+def strip_phase_from_brief(value: Any) -> str:
+    text = str(value or "").strip()
+    text = re.sub(r"^(?:[【\[]?(?:预训练|后训练)[】\]]?\s*[:：、-]?\s*)+", "", text)
+    text = text.replace("【预训练】", "").replace("【后训练】", "")
+    return re.sub(r"\s+", " ", text).strip()
+
+
 def format_steps(items: list[tuple[str, str, int]]) -> str:
     lines = []
     for index, (description, action, seconds) in enumerate(items, start=1):
@@ -757,15 +774,13 @@ def build_task_row(
     actions = [action for _, action, _ in steps]
     level = task_level(len(steps), actions)
     target = target_for_level(level)
-    total_seconds = seconds_from_steps(step_text)
-    duration_hours = round((target * max(total_seconds, 1)) / 3600, 2)
     name = f"{clean_task_name(idea)}_{index}"
     workspace = "可移动场景" if robot.mobile else "固定工位"
     brief = f"基于“{idea}”生成，限定在{workspace}和已配置末端执行器能力内完成。"
     return {
-        "自动编号": str(max_auto_id + index),
-        "任务ID": uuid.uuid4().hex,
-        "采集时长（小时）": duration_hours,
+        "自动编号": "",
+        "任务ID": "",
+        "采集时长（小时）": "",
         "提交时间": now_text(),
         "提交人": "AI需求生成器",
         "填写日期": today_midnight_text(),
@@ -818,6 +833,7 @@ def qwen_prompt(
 单条任务目标次数上限：{max_target_times} 次
 本批次编号：{batch_index}
 本批次必须生成任务需求条数：{task_count}
+任务名称阶段前缀：{task_name_phase_prefix(task_phase)}
 
 机器人配置：
 {robot_text}
@@ -835,6 +851,7 @@ def qwen_prompt(
 {json.dumps(schema, ensure_ascii=False, indent=2)}
 
 硬性规则：
+0. 自动编号、任务ID、采集时长（小时）不需要填写，留空；不要自行生成编号、UUID 或采集时长。
 1. 固定工位机器人不能包含 Move（移动）、Navigate（导航）、Carry（携带）、Transport（搬运）等底盘移动任务。
 2. 单臂机器人不能生成 Fold（折叠）、Unfold（展开）、HandOver（传递）等明显双臂协作任务。
 3. 未配置全身能力时，不生成蹲下、伸展、地面拾取、低柜/高柜任务。
@@ -843,15 +860,15 @@ def qwen_prompt(
 6. 任务步骤数量要和任务步骤描述行数一致；目标次数必须在 1 到 {max_target_times} 之间，这是单条任务要采集的次数，不是生成任务需求的条数。
 7. 输出 tasks 数组长度必须等于“本批次必须生成任务需求条数”。
 8. 同一批内任务名称不能重复；不同机器人之间要结合各自能力差异，不要机械复制同一任务。
-9. 任务简述开头必须带上【{phase["label"]}】。
+9. 任务简述不要写【预训练】或【后训练】；任务名称必须以“{task_name_phase_prefix(task_phase)}”开头。
 10. 优先参考 RAG 样例的采集设备、场景域、动作标签和步骤粒度；禁止简单复制历史任务名称和步骤。
 
 输出 JSON schema：
 {{
   "tasks": [
     {{
-      "任务名称": "string",
-      "任务简述": "string",
+      "任务名称": "{task_name_phase_prefix(task_phase)}string",
+      "任务简述": "string，不包含【预训练】或【后训练】",
       "采集设备": "必须等于某个机器人名称",
       "采集模式": "双臂|单臂_右|单臂_左",
       "场景域分类": "家居家政|通用抓取放置|商超药店|餐饮服务|工业制造",
@@ -1012,10 +1029,11 @@ def normalize_task(row: dict[str, Any], robot: RobotProfile | None, serial: int,
     normalized = {header: row.get(header, "") for header in TASK_HEADERS}
     phase = TASK_PHASES.get(task_phase, TASK_PHASES["pretrain"])
     max_target_times = int(phase["maxTargetTimes"])
-    if not normalized["自动编号"]:
-        normalized["自动编号"] = str(int(WORKBOOK_SUMMARY.get("max_auto_id") or 0) + serial)
-    if not normalized["任务ID"]:
-        normalized["任务ID"] = uuid.uuid4().hex
+    normalized["自动编号"] = ""
+    normalized["任务ID"] = ""
+    normalized["采集时长（小时）"] = ""
+    normalized["任务名称"] = normalize_task_name_phase(normalized.get("任务名称"), task_phase)
+    normalized["任务简述"] = strip_phase_from_brief(normalized.get("任务简述"))
     if not normalized["提交时间"]:
         normalized["提交时间"] = now_text()
     if not normalized["提交人"]:
@@ -1051,8 +1069,6 @@ def normalize_task(row: dict[str, Any], robot: RobotProfile | None, serial: int,
     normalized["目标次数"] = target
     if target_warning:
         normalized["_target_warning"] = target_warning
-    if not normalized.get("采集时长（小时）") or target != raw_target:
-        normalized["采集时长（小时）"] = round((target * max(seconds_from_steps(steps), 1)) / 3600, 2)
     return normalized
 
 
