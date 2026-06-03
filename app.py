@@ -3,10 +3,17 @@ from __future__ import annotations
 import json
 import os
 import re
+import base64
+import hashlib
+import hmac
+import secrets
+import threading
+import time
 from collections import Counter
 from dataclasses import dataclass
 from datetime import datetime
 from http import HTTPStatus
+from http.cookies import SimpleCookie
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
@@ -30,7 +37,13 @@ else:
 ROOT = Path(__file__).resolve().parent
 STATIC_DIR = ROOT / "static"
 OUTPUT_DIR = ROOT / "outputs" / "generated"
+USER_OUTPUT_ROOT = ROOT / "outputs" / "users"
 WORKBOOK_UPLOAD_DIR = ROOT / "work" / "rag_uploads"
+USER_DATA_DIR = ROOT / "work" / "users"
+AUTH_STORE_PATH = USER_DATA_DIR / "accounts.json"
+SESSION_COOKIE_NAME = "rds_session"
+SESSION_TTL_SECONDS = 60 * 60 * 12
+PASSWORD_HASH_ITERATIONS = 180_000
 
 
 def load_local_env() -> None:
@@ -62,6 +75,267 @@ DEFAULT_SOURCE_XLSX = Path(
     )
 )
 CURRENT_SOURCE_XLSX = DEFAULT_SOURCE_XLSX
+
+
+def safe_identifier(value: Any, fallback: str = "user") -> str:
+    text = re.sub(r"[^\w.-]+", "_", str(value or "").strip()).strip("._")
+    return text[:80] or fallback
+
+
+def utc_timestamp() -> int:
+    return int(time.time())
+
+
+def hash_password(password: str, salt: str | None = None) -> str:
+    if not str(password or ""):
+        raise ValueError("密码不能为空")
+    salt_text = salt or base64.urlsafe_b64encode(secrets.token_bytes(18)).decode("ascii").rstrip("=")
+    digest = hashlib.pbkdf2_hmac(
+        "sha256",
+        str(password).encode("utf-8"),
+        salt_text.encode("utf-8"),
+        PASSWORD_HASH_ITERATIONS,
+    )
+    encoded = base64.urlsafe_b64encode(digest).decode("ascii").rstrip("=")
+    return f"pbkdf2_sha256${PASSWORD_HASH_ITERATIONS}${salt_text}${encoded}"
+
+
+def verify_password(password: str, stored_hash: str) -> bool:
+    try:
+        algorithm, iterations_text, salt, expected = str(stored_hash or "").split("$", 3)
+        iterations = int(iterations_text)
+    except (ValueError, TypeError):
+        return False
+    if algorithm != "pbkdf2_sha256" or iterations < 1:
+        return False
+    digest = hashlib.pbkdf2_hmac("sha256", str(password or "").encode("utf-8"), salt.encode("utf-8"), iterations)
+    actual = base64.urlsafe_b64encode(digest).decode("ascii").rstrip("=")
+    return hmac.compare_digest(actual, expected)
+
+
+class AuthStore:
+    def __init__(self, path: Path):
+        self.path = Path(path)
+        self._lock = threading.RLock()
+
+    def _read(self) -> dict[str, Any]:
+        if not self.path.exists():
+            return {"users": []}
+        try:
+            data = json.loads(self.path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError:
+            return {"users": []}
+        users = data.get("users")
+        return {"users": users if isinstance(users, list) else []}
+
+    def _write(self, data: dict[str, Any]) -> None:
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        tmp_path = self.path.with_suffix(".tmp")
+        tmp_path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+        tmp_path.replace(self.path)
+
+    def _public_user(self, user: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "id": str(user.get("id") or ""),
+            "username": str(user.get("username") or ""),
+            "role": str(user.get("role") or "user"),
+            "disabled": bool(user.get("disabled", False)),
+            "createdAt": user.get("createdAt") or "",
+        }
+
+    def _find_user(self, data: dict[str, Any], username: str) -> dict[str, Any] | None:
+        wanted = str(username or "").strip().lower()
+        for user in data.get("users", []):
+            if str(user.get("username") or "").strip().lower() == wanted:
+                return user
+        return None
+
+    def _find_user_by_id(self, data: dict[str, Any], user_id: str) -> dict[str, Any] | None:
+        wanted = str(user_id or "")
+        for user in data.get("users", []):
+            if str(user.get("id") or "") == wanted:
+                return user
+        return None
+
+    def bootstrap_admin(self, username: str, password: str) -> dict[str, Any]:
+        with self._lock:
+            data = self._read()
+            for user in data.get("users", []):
+                if user.get("role") == "admin":
+                    return self._public_user(user)
+            username = str(username or "").strip() or "admin"
+            user = {
+                "id": f"u_{secrets.token_hex(8)}",
+                "username": username,
+                "role": "admin",
+                "passwordHash": hash_password(password),
+                "disabled": False,
+                "createdAt": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            }
+            data.setdefault("users", []).append(user)
+            self._write(data)
+            return self._public_user(user)
+
+    def require_admin(self, actor: dict[str, Any]) -> None:
+        if str(actor.get("role") or "") != "admin" or actor.get("disabled"):
+            raise PermissionError("需要管理员权限")
+
+    def create_user(self, actor: dict[str, Any], username: str, password: str, role: str = "user") -> dict[str, Any]:
+        self.require_admin(actor)
+        username = str(username or "").strip()
+        role = str(role or "user").strip() or "user"
+        if not username:
+            raise ValueError("用户名不能为空")
+        if role not in {"user", "admin"}:
+            raise ValueError("角色只能是 user 或 admin")
+        with self._lock:
+            data = self._read()
+            if self._find_user(data, username):
+                raise ValueError("用户名已存在")
+            user = {
+                "id": f"u_{secrets.token_hex(8)}",
+                "username": username,
+                "role": role,
+                "passwordHash": hash_password(password),
+                "disabled": False,
+                "createdAt": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            }
+            data.setdefault("users", []).append(user)
+            self._write(data)
+            return self._public_user(user)
+
+    def list_users(self, actor: dict[str, Any]) -> list[dict[str, Any]]:
+        self.require_admin(actor)
+        with self._lock:
+            return [self._public_user(user) for user in self._read().get("users", [])]
+
+    def authenticate(self, username: str, password: str) -> dict[str, Any]:
+        with self._lock:
+            data = self._read()
+            user = self._find_user(data, username)
+            if not user or user.get("disabled"):
+                raise PermissionError("用户名或密码错误")
+            if not verify_password(password, str(user.get("passwordHash") or "")):
+                raise PermissionError("用户名或密码错误")
+            return self._public_user(user)
+
+    def get_user(self, user_id: str) -> dict[str, Any] | None:
+        with self._lock:
+            user = self._find_user_by_id(self._read(), user_id)
+            if not user or user.get("disabled"):
+                return None
+            return self._public_user(user)
+
+    def set_user_disabled(self, actor: dict[str, Any], user_id: str, disabled: bool) -> dict[str, Any]:
+        self.require_admin(actor)
+        with self._lock:
+            data = self._read()
+            user = self._find_user_by_id(data, user_id)
+            if not user:
+                raise ValueError("用户不存在")
+            if user.get("id") == actor.get("id") and disabled:
+                raise ValueError("不能禁用当前管理员账户")
+            user["disabled"] = bool(disabled)
+            self._write(data)
+            return self._public_user(user)
+
+    def set_password(self, actor: dict[str, Any], user_id: str, password: str) -> dict[str, Any]:
+        self.require_admin(actor)
+        with self._lock:
+            data = self._read()
+            user = self._find_user_by_id(data, user_id)
+            if not user:
+                raise ValueError("用户不存在")
+            user["passwordHash"] = hash_password(password)
+            self._write(data)
+            return self._public_user(user)
+
+
+@dataclass
+class WorkbookState:
+    source: Path
+    summary: dict[str, Any]
+    rag_documents: list[dict[str, Any]]
+
+
+class UserWorkspaceManager:
+    def __init__(self, base_dir: Path, default_source: Path, output_root: Path | None = None):
+        self.base_dir = Path(base_dir)
+        self.default_source = Path(default_source)
+        self.output_root = Path(output_root or USER_OUTPUT_ROOT)
+        self._lock = threading.RLock()
+        self._states: dict[str, WorkbookState] = {}
+
+    def user_id(self, user: dict[str, Any] | None) -> str:
+        return safe_identifier((user or {}).get("id") or "local", "local")
+
+    def user_root(self, user: dict[str, Any] | None) -> Path:
+        return self.base_dir / self.user_id(user)
+
+    def settings_path(self, user: dict[str, Any] | None) -> Path:
+        return self.user_root(user) / "settings.json"
+
+    def _load_source_for_user(self, user: dict[str, Any] | None) -> Path:
+        settings = self.settings_path(user)
+        if settings.exists():
+            try:
+                data = json.loads(settings.read_text(encoding="utf-8"))
+            except json.JSONDecodeError:
+                data = {}
+            source = data.get("activeSource")
+            if source:
+                return Path(source)
+        return self.default_source
+
+    def _state_from_source(self, source: Path) -> WorkbookState:
+        summary = load_workbook_summary(source)
+        if not summary.get("ok"):
+            raise ValueError(str(summary.get("error") or "存量数据需求表读取失败"))
+        docs = summary.pop("ragDocuments", [])
+        summary["ragDocumentCount"] = len(docs)
+        return WorkbookState(source=Path(source), summary=summary, rag_documents=docs)
+
+    def get_workspace(self, user: dict[str, Any] | None) -> WorkbookState:
+        user_id = self.user_id(user)
+        with self._lock:
+            if user_id not in self._states:
+                self._states[user_id] = self._state_from_source(self._load_source_for_user(user))
+            return self._states[user_id]
+
+    def set_active_workbook(self, user: dict[str, Any] | None, source_path: Path | str) -> dict[str, Any]:
+        source = Path(source_path)
+        state = self._state_from_source(source)
+        user_id = self.user_id(user)
+        with self._lock:
+            root = self.user_root(user)
+            root.mkdir(parents=True, exist_ok=True)
+            self.settings_path(user).write_text(
+                json.dumps({"activeSource": str(source), "updatedAt": datetime.now().strftime("%Y-%m-%d %H:%M:%S")}, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+            self._states[user_id] = state
+        return state.summary
+
+    def save_upload(self, user: dict[str, Any], filename: str, file_data: bytes) -> Path:
+        uploads = self.user_root(user) / "rag_uploads"
+        uploads.mkdir(parents=True, exist_ok=True)
+        saved_name = f"{datetime.now().strftime('%Y%m%d_%H%M%S')}_{safe_upload_filename(filename)}"
+        saved_path = uploads / saved_name
+        saved_path.write_bytes(file_data)
+        return saved_path
+
+    def output_dir(self, user: dict[str, Any] | None) -> Path:
+        return self.output_root / self.user_id(user) / "generated"
+
+    def resolve_download(self, user: dict[str, Any] | None, filename: str) -> Path:
+        safe_name = Path(str(filename or "")).name
+        if not safe_name or safe_name != str(filename or ""):
+            raise PermissionError("没有访问该文件权限")
+        candidate = (self.output_dir(user) / safe_name).resolve()
+        root = self.output_dir(user).resolve()
+        if root not in candidate.parents or not candidate.exists() or not candidate.is_file():
+            raise PermissionError("没有访问该文件权限")
+        return candidate
 
 
 def env_int(name: str, default: int) -> int:
@@ -372,6 +646,7 @@ def retrieve_rag_examples(
 def build_rag_context(
     robots: list["RobotProfile"],
     ideas: list[str],
+    rag_documents: list[dict[str, Any]] | None = None,
     limit_per_idea: int = 4,
     total_limit: int = 12,
 ) -> dict[str, Any]:
@@ -379,7 +654,7 @@ def build_rag_context(
     seen: set[tuple[str, str]] = set()
     query_ideas = ideas or [robot.name for robot in robots] or ["机器人数据采集"]
     for idea in query_ideas:
-        for example in retrieve_rag_examples(idea, robots, limit=limit_per_idea):
+        for example in retrieve_rag_examples(idea, robots, rag_documents, limit=limit_per_idea):
             key = (str(example.get("任务名称") or ""), str(example.get("采集设备") or ""))
             if key in seen:
                 continue
@@ -391,7 +666,7 @@ def build_rag_context(
             break
     return {
         "enabled": bool(selected),
-        "indexSize": len(RAG_DOCUMENTS),
+        "indexSize": len(rag_documents if rag_documents is not None else RAG_DOCUMENTS),
         "retrievalMethod": "local_keyword_bm25_like",
         "examples": selected,
     }
@@ -617,12 +892,97 @@ except ValueError as exc:
     RAG_DOCUMENTS = []
 
 
+AUTH_STORE = AuthStore(AUTH_STORE_PATH)
+DEFAULT_ADMIN_USERNAME = os.getenv("ADMIN_USERNAME", "admin").strip() or "admin"
+DEFAULT_ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "admin123456").strip() or "admin123456"
+try:
+    BOOTSTRAP_ADMIN = AUTH_STORE.bootstrap_admin(DEFAULT_ADMIN_USERNAME, DEFAULT_ADMIN_PASSWORD)
+except ValueError:
+    BOOTSTRAP_ADMIN = {"id": "", "username": DEFAULT_ADMIN_USERNAME, "role": "admin", "disabled": False, "createdAt": ""}
+
+WORKSPACE_MANAGER = UserWorkspaceManager(USER_DATA_DIR, DEFAULT_SOURCE_XLSX, USER_OUTPUT_ROOT)
+LOCAL_USER = {"id": "local", "username": "local", "role": "admin", "disabled": False, "createdAt": ""}
+SESSION_STORE: dict[str, dict[str, Any]] = {}
+SESSION_LOCK = threading.RLock()
+
+
 def parse_bool(value: Any) -> bool:
     if isinstance(value, bool):
         return value
     if isinstance(value, str):
         return value.strip().lower() in {"1", "true", "yes", "y", "on", "是"}
     return bool(value)
+
+
+def public_session_user(user: dict[str, Any] | None) -> dict[str, Any] | None:
+    if not user:
+        return None
+    return {
+        "id": str(user.get("id") or ""),
+        "username": str(user.get("username") or ""),
+        "role": str(user.get("role") or "user"),
+        "isAdmin": str(user.get("role") or "") == "admin",
+    }
+
+
+def create_session(user: dict[str, Any]) -> str:
+    token = secrets.token_urlsafe(32)
+    with SESSION_LOCK:
+        SESSION_STORE[token] = {"userId": user["id"], "expiresAt": utc_timestamp() + SESSION_TTL_SECONDS}
+    return token
+
+
+def destroy_session(token: str) -> None:
+    with SESSION_LOCK:
+        SESSION_STORE.pop(str(token or ""), None)
+
+
+def user_from_session_token(token: str) -> dict[str, Any] | None:
+    token = str(token or "")
+    if not token:
+        return None
+    with SESSION_LOCK:
+        session = SESSION_STORE.get(token)
+        if not session:
+            return None
+        if int(session.get("expiresAt") or 0) <= utc_timestamp():
+            SESSION_STORE.pop(token, None)
+            return None
+        user = AUTH_STORE.get_user(str(session.get("userId") or ""))
+        if not user:
+            SESSION_STORE.pop(token, None)
+            return None
+        session["expiresAt"] = utc_timestamp() + SESSION_TTL_SECONDS
+        return user
+
+
+def parse_session_cookie(header_value: str | None) -> str:
+    if not header_value:
+        return ""
+    cookie = SimpleCookie()
+    try:
+        cookie.load(header_value)
+    except Exception:
+        return ""
+    morsel = cookie.get(SESSION_COOKIE_NAME)
+    return morsel.value if morsel else ""
+
+
+def session_cookie_header(token: str, max_age: int = SESSION_TTL_SECONDS) -> str:
+    return f"{SESSION_COOKIE_NAME}={token}; Path=/; Max-Age={max_age}; HttpOnly; SameSite=Lax"
+
+
+def clear_session_cookie_header() -> str:
+    return f"{SESSION_COOKIE_NAME}=; Path=/; Max-Age=0; HttpOnly; SameSite=Lax"
+
+
+def workspace_state_for(
+    current_user: dict[str, Any] | None = None,
+    workspace_manager: UserWorkspaceManager | None = None,
+) -> WorkbookState | None:
+    if current_user is None and workspace_manager is None:
+        return None
+    return (workspace_manager or WORKSPACE_MANAGER).get_workspace(current_user or LOCAL_USER)
 
 
 def parse_task_phase(value: Any) -> str:
@@ -632,9 +992,15 @@ def parse_task_phase(value: Any) -> str:
     return "pretrain"
 
 
-def workbook_context_for_prompt(example_limit: int = 8) -> dict[str, Any]:
+def workbook_context_for_prompt(
+    example_limit: int = 8,
+    workbook_summary: dict[str, Any] | None = None,
+    rag_documents: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    summary = workbook_summary if workbook_summary is not None else WORKBOOK_SUMMARY
+    docs = rag_documents if rag_documents is not None else RAG_DOCUMENTS
     examples = []
-    for item in WORKBOOK_SUMMARY.get("examples", [])[:example_limit]:
+    for item in summary.get("examples", [])[:example_limit]:
         examples.append(
             {
                 "任务名称": item.get("任务名称"),
@@ -647,13 +1013,13 @@ def workbook_context_for_prompt(example_limit: int = 8) -> dict[str, Any]:
             }
         )
     return {
-        "rows": WORKBOOK_SUMMARY.get("rows", 0),
-        "topDevices": WORKBOOK_SUMMARY.get("devices", [])[:12],
-        "topCategories": WORKBOOK_SUMMARY.get("categories", [])[:8],
-        "topModes": WORKBOOK_SUMMARY.get("modes", [])[:5],
-        "topLevels": WORKBOOK_SUMMARY.get("levels", [])[:5],
-        "actions": WORKBOOK_SUMMARY.get("actions", [])[:30],
-        "ragDocumentCount": WORKBOOK_SUMMARY.get("ragDocumentCount", len(RAG_DOCUMENTS)),
+        "rows": summary.get("rows", 0),
+        "topDevices": summary.get("devices", [])[:12],
+        "topCategories": summary.get("categories", [])[:8],
+        "topModes": summary.get("modes", [])[:5],
+        "topLevels": summary.get("levels", [])[:5],
+        "actions": summary.get("actions", [])[:30],
+        "ragDocumentCount": summary.get("ragDocumentCount", len(docs)),
         "examples": examples,
     }
 
@@ -854,6 +1220,7 @@ def qwen_prompt(
     task_count: int,
     task_phase: str,
     batch_index: int = 1,
+    workspace_state: WorkbookState | None = None,
 ) -> tuple[str, str]:
     phase = TASK_PHASES[task_phase]
     max_target_times = int(phase["maxTargetTimes"])
@@ -864,8 +1231,10 @@ def qwen_prompt(
         "actions": list(CANONICAL_ACTIONS.values()),
         "format": "任务步骤描述必须逐行编号，每一行末尾必须包含 <动作（中文）><秒数s>。",
     }
-    workbook_context = workbook_context_for_prompt(example_limit=6)
-    rag_context = build_rag_context(robots, ideas, limit_per_idea=4, total_limit=12)
+    workbook_summary = workspace_state.summary if workspace_state else WORKBOOK_SUMMARY
+    rag_documents = workspace_state.rag_documents if workspace_state else RAG_DOCUMENTS
+    workbook_context = workbook_context_for_prompt(example_limit=6, workbook_summary=workbook_summary, rag_documents=rag_documents)
+    rag_context = build_rag_context(robots, ideas, rag_documents=rag_documents, limit_per_idea=4, total_limit=12)
     robot_text = "\n".join(
         f"- {robot.summary()}\n  允许动作：{', '.join(derive_capabilities(robot)['allowedActions'])}"
         for robot in robots
@@ -1028,8 +1397,9 @@ def call_qwen(
     model: str,
     endpoint: str,
     batch_index: int = 1,
+    workspace_state: WorkbookState | None = None,
 ) -> list[dict[str, Any]]:
-    system, user = qwen_prompt(robots, ideas, task_count, task_phase, batch_index)
+    system, user = qwen_prompt(robots, ideas, task_count, task_phase, batch_index, workspace_state=workspace_state)
     parsed = call_qwen_json(system, user, api_key, model, endpoint, timeout=QWEN_GENERATION_TIMEOUT_SECONDS)
     tasks = parsed.get("tasks", parsed if isinstance(parsed, list) else [])
     if not isinstance(tasks, list):
@@ -1200,10 +1570,11 @@ def validate_tasks(rows: list[dict[str, Any]], robots: list[RobotProfile], task_
     return [validate_task(row, robots, index, task_phase) for index, row in enumerate(rows, start=1)]
 
 
-def write_xlsx(validations: list[dict[str, Any]], robots: list[RobotProfile]) -> Path:
+def write_xlsx(validations: list[dict[str, Any]], robots: list[RobotProfile], output_dir: Path | None = None) -> Path:
     if OPENPYXL_IMPORT_ERROR:
         raise RuntimeError(f"openpyxl unavailable: {OPENPYXL_IMPORT_ERROR}")
-    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+    target_dir = Path(output_dir or OUTPUT_DIR)
+    target_dir.mkdir(parents=True, exist_ok=True)
     wb = Workbook()
     ws = wb.active
     ws.title = "生成结果"
@@ -1264,12 +1635,16 @@ def write_xlsx(validations: list[dict[str, Any]], robots: list[RobotProfile]) ->
                 )
 
     filename = f"generated_data_requirements_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
-    output = OUTPUT_DIR / filename
+    output = target_dir / filename
     wb.save(output)
     return output
 
 
-def brainstorm_ideas_response(body: dict[str, Any]) -> dict[str, Any]:
+def brainstorm_ideas_response(
+    body: dict[str, Any],
+    current_user: dict[str, Any] | None = None,
+    workspace_manager: UserWorkspaceManager | None = None,
+) -> dict[str, Any]:
     robots = parse_robots(body.get("robots"))
     if not robots:
         raise ValueError("请先选择或新增至少一台机器人，再自动脑洞 idea")
@@ -1288,11 +1663,14 @@ def brainstorm_ideas_response(body: dict[str, Any]) -> dict[str, Any]:
     idea_count = max(1, min(idea_count, MAX_GENERATED_TASKS_PER_REQUEST))
     model = str(body.get("qwenModel") or DEFAULT_QWEN_MODEL).strip() or DEFAULT_QWEN_MODEL
     endpoint = str(body.get("qwenEndpoint") or DEFAULT_QWEN_ENDPOINT).strip() or DEFAULT_QWEN_ENDPOINT
+    workspace_state = workspace_state_for(current_user, workspace_manager)
+    workbook_summary = workspace_state.summary if workspace_state else WORKBOOK_SUMMARY
+    rag_documents = workspace_state.rag_documents if workspace_state else RAG_DOCUMENTS
     robot_text = "\n".join(
         f"- {robot.summary()}\n  允许动作：{', '.join(derive_capabilities(robot)['allowedActions'])}"
         for robot in robots
     )
-    workbook_context = workbook_context_for_prompt(example_limit=8)
+    workbook_context = workbook_context_for_prompt(example_limit=8, workbook_summary=workbook_summary, rag_documents=rag_documents)
     rag_context = build_rag_context(
         robots,
         [
@@ -1300,6 +1678,7 @@ def brainstorm_ideas_response(body: dict[str, Any]) -> dict[str, Any]:
             " ".join(robot.name for robot in robots),
             "通用抓取放置 家居家政 商超药店 餐饮服务 工业制造",
         ],
+        rag_documents=rag_documents,
         limit_per_idea=5,
         total_limit=16,
     )
@@ -1367,7 +1746,11 @@ def brainstorm_ideas_response(body: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def generation_response(body: dict[str, Any]) -> dict[str, Any]:
+def generation_response(
+    body: dict[str, Any],
+    current_user: dict[str, Any] | None = None,
+    workspace_manager: UserWorkspaceManager | None = None,
+) -> dict[str, Any]:
     robots = parse_robots(body.get("robots"))
     if not robots:
         raise ValueError("至少需要输入一台机器人配置")
@@ -1393,6 +1776,7 @@ def generation_response(body: dict[str, Any]) -> dict[str, Any]:
     endpoint = str(body.get("qwenEndpoint") or DEFAULT_QWEN_ENDPOINT).strip() or DEFAULT_QWEN_ENDPOINT
     source = "qwen"
     notices: list[str] = []
+    workspace_state = workspace_state_for(current_user, workspace_manager)
 
     generated_rows: list[dict[str, Any]] = []
     try:
@@ -1400,7 +1784,19 @@ def generation_response(body: dict[str, Any]) -> dict[str, Any]:
         batch_index = 1
         while remaining > 0:
             batch_count = min(remaining, MAX_QWEN_TASKS_PER_BATCH)
-            generated_rows.extend(call_qwen(robots, ideas, batch_count, task_phase, api_key, model, endpoint, batch_index))
+            generated_rows.extend(
+                call_qwen(
+                    robots,
+                    ideas,
+                    batch_count,
+                    task_phase,
+                    api_key,
+                    model,
+                    endpoint,
+                    batch_index,
+                    workspace_state=workspace_state,
+                )
+            )
             remaining -= batch_count
             batch_index += 1
     except (HTTPError, URLError, TimeoutError, ValueError, json.JSONDecodeError) as exc:
@@ -1430,7 +1826,11 @@ def generation_response(body: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def export_response(body: dict[str, Any]) -> dict[str, Any]:
+def export_response(
+    body: dict[str, Any],
+    current_user: dict[str, Any] | None = None,
+    workspace_manager: UserWorkspaceManager | None = None,
+) -> dict[str, Any]:
     robots = parse_robots(body.get("robots"))
     if not robots:
         raise ValueError("至少需要输入一台机器人配置")
@@ -1443,7 +1843,11 @@ def export_response(body: dict[str, Any]) -> dict[str, Any]:
         raise ValueError("没有可导出的有效需求行")
     accepted_count = sum(1 for item in validations if item["status"] == "accepted")
     rejected_count = len(validations) - accepted_count
-    output_path = write_xlsx(validations, robots)
+    if current_user is None and workspace_manager is None:
+        output_path = write_xlsx(validations, robots)
+    else:
+        manager = workspace_manager or WORKSPACE_MANAGER
+        output_path = write_xlsx(validations, robots, manager.output_dir(current_user or LOCAL_USER))
     return {
         "ok": True,
         "downloadUrl": f"/download/{output_path.name}",
@@ -1465,11 +1869,13 @@ class Handler(BaseHTTPRequestHandler):
     def log_message(self, fmt: str, *args: Any) -> None:
         print(f"[{now_text()}] {self.address_string()} {fmt % args}")
 
-    def send_json(self, payload: dict[str, Any], status: int = 200) -> None:
+    def send_json(self, payload: dict[str, Any], status: int = 200, headers: dict[str, str] | None = None) -> None:
         data = json.dumps(payload, ensure_ascii=False, default=str).encode("utf-8")
         self.send_response(status)
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Content-Length", str(len(data)))
+        for name, value in (headers or {}).items():
+            self.send_header(name, value)
         self.end_headers()
         self.wfile.write(data)
 
@@ -1497,62 +1903,165 @@ class Handler(BaseHTTPRequestHandler):
             raise ValueError("上传文件过大")
         return self.rfile.read(length) if length else b""
 
+    def session_token(self) -> str:
+        return parse_session_cookie(self.headers.get("Cookie"))
+
+    def current_user(self) -> dict[str, Any] | None:
+        return user_from_session_token(self.session_token())
+
+    def require_user(self) -> dict[str, Any] | None:
+        user = self.current_user()
+        if user:
+            return user
+        self.send_json({"ok": False, "error": "请先登录"}, status=401)
+        return None
+
+    def require_admin_user(self, user: dict[str, Any]) -> bool:
+        try:
+            AUTH_STORE.require_admin(user)
+        except PermissionError as exc:
+            self.send_json({"ok": False, "error": str(exc)}, status=403)
+            return False
+        return True
+
     def do_OPTIONS(self) -> None:
         self.send_response(204)
         self.send_header("Access-Control-Allow-Origin", "*")
-        self.send_header("Access-Control-Allow-Headers", "Content-Type")
+        self.send_header("Access-Control-Allow-Headers", "Content-Type, Cookie")
         self.send_header("Access-Control-Allow-Methods", "GET,POST,OPTIONS")
         self.end_headers()
 
     def do_GET(self) -> None:
         parsed = urlparse(self.path)
         path = parsed.path
-        if path == "/api/health":
-            self.send_json(
-                {
-                    "ok": OPENPYXL_IMPORT_ERROR is None,
-                    "time": now_text(),
-                    "sourceWorkbook": str(CURRENT_SOURCE_XLSX),
-                    "defaultSourceWorkbook": str(DEFAULT_SOURCE_XLSX),
-                    "openpyxlError": str(OPENPYXL_IMPORT_ERROR) if OPENPYXL_IMPORT_ERROR else "",
-                    "qwenConfigured": bool(os.getenv("DASHSCOPE_API_KEY", "").strip()),
-                    "qwenModel": DEFAULT_QWEN_MODEL,
-                    "qwenModelOptions": QWEN_MODEL_OPTIONS,
-                    "qwenEndpoint": DEFAULT_QWEN_ENDPOINT,
-                }
-            )
-            return
-        if path == "/api/schema":
-            self.send_json(WORKBOOK_SUMMARY)
-            return
-        if path.startswith("/download/"):
-            filename = Path(path).name
-            self.send_file(
-                OUTPUT_DIR / filename,
-                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            )
-            return
-        if path == "/":
-            self.send_file(STATIC_DIR / "index.html", "text/html; charset=utf-8")
-            return
+        try:
+            if path == "/api/session":
+                user = self.current_user()
+                self.send_json(
+                    {
+                        "ok": True,
+                        "authenticated": bool(user),
+                        "user": public_session_user(user),
+                        "defaultAdminUsername": DEFAULT_ADMIN_USERNAME,
+                    }
+                )
+                return
 
-        requested = (STATIC_DIR / path.lstrip("/")).resolve()
-        if STATIC_DIR in requested.parents:
-            suffix = requested.suffix.lower()
-            content_type = {
-                ".css": "text/css; charset=utf-8",
-                ".js": "application/javascript; charset=utf-8",
-                ".png": "image/png",
-                ".jpg": "image/jpeg",
-                ".jpeg": "image/jpeg",
-            }.get(suffix, "application/octet-stream")
-            self.send_file(requested, content_type)
-            return
-        self.send_error(HTTPStatus.NOT_FOUND)
+            if path == "/":
+                self.send_file(STATIC_DIR / "index.html", "text/html; charset=utf-8")
+                return
+
+            if path.startswith("/download/"):
+                user = self.require_user()
+                if not user:
+                    return
+                try:
+                    download_path = WORKSPACE_MANAGER.resolve_download(user, Path(path).name)
+                except PermissionError:
+                    self.send_json({"ok": False, "error": "文件不存在或无权限"}, status=404)
+                    return
+                self.send_file(download_path, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+                return
+
+            if path.startswith("/api/"):
+                user = self.require_user()
+                if not user:
+                    return
+                if path == "/api/health":
+                    state = WORKSPACE_MANAGER.get_workspace(user)
+                    self.send_json(
+                        {
+                            "ok": OPENPYXL_IMPORT_ERROR is None and bool(state.summary.get("ok")),
+                            "time": now_text(),
+                            "user": public_session_user(user),
+                            "sourceWorkbook": str(state.source),
+                            "defaultSourceWorkbook": str(DEFAULT_SOURCE_XLSX),
+                            "openpyxlError": str(OPENPYXL_IMPORT_ERROR) if OPENPYXL_IMPORT_ERROR else "",
+                            "qwenConfigured": bool(os.getenv("DASHSCOPE_API_KEY", "").strip()),
+                            "qwenModel": DEFAULT_QWEN_MODEL,
+                            "qwenModelOptions": QWEN_MODEL_OPTIONS,
+                            "qwenEndpoint": DEFAULT_QWEN_ENDPOINT,
+                        }
+                    )
+                    return
+                if path == "/api/schema":
+                    self.send_json(WORKSPACE_MANAGER.get_workspace(user).summary)
+                    return
+                if path == "/api/admin/users":
+                    if not self.require_admin_user(user):
+                        return
+                    self.send_json({"ok": True, "users": AUTH_STORE.list_users(user)})
+                    return
+                self.send_json({"ok": False, "error": "接口不存在"}, status=404)
+                return
+
+            requested = (STATIC_DIR / path.lstrip("/")).resolve()
+            if STATIC_DIR in requested.parents:
+                suffix = requested.suffix.lower()
+                content_type = {
+                    ".css": "text/css; charset=utf-8",
+                    ".js": "application/javascript; charset=utf-8",
+                    ".png": "image/png",
+                    ".jpg": "image/jpeg",
+                    ".jpeg": "image/jpeg",
+                }.get(suffix, "application/octet-stream")
+                self.send_file(requested, content_type)
+                return
+            self.send_error(HTTPStatus.NOT_FOUND)
+        except ValueError as exc:
+            self.send_json({"ok": False, "error": str(exc)}, status=400)
+        except Exception as exc:
+            self.send_json({"ok": False, "error": f"{type(exc).__name__}: {exc}"}, status=500)
 
     def do_POST(self) -> None:
         parsed = urlparse(self.path)
         try:
+            if parsed.path == "/api/auth/login":
+                body = self.read_json_body()
+                user = AUTH_STORE.authenticate(str(body.get("username") or ""), str(body.get("password") or ""))
+                token = create_session(user)
+                self.send_json(
+                    {"ok": True, "authenticated": True, "user": public_session_user(user)},
+                    headers={"Set-Cookie": session_cookie_header(token)},
+                )
+                return
+            if parsed.path == "/api/auth/logout":
+                token = self.session_token()
+                if token:
+                    destroy_session(token)
+                self.send_json({"ok": True, "authenticated": False}, headers={"Set-Cookie": clear_session_cookie_header()})
+                return
+
+            user = self.require_user()
+            if not user:
+                return
+
+            if parsed.path == "/api/admin/users":
+                if not self.require_admin_user(user):
+                    return
+                body = self.read_json_body()
+                created = AUTH_STORE.create_user(
+                    user,
+                    str(body.get("username") or ""),
+                    str(body.get("password") or ""),
+                    str(body.get("role") or "user"),
+                )
+                self.send_json({"ok": True, "user": created, "users": AUTH_STORE.list_users(user)})
+                return
+            if parsed.path == "/api/admin/users/disabled":
+                if not self.require_admin_user(user):
+                    return
+                body = self.read_json_body()
+                updated = AUTH_STORE.set_user_disabled(user, str(body.get("userId") or body.get("id") or ""), parse_bool(body.get("disabled")))
+                self.send_json({"ok": True, "user": updated, "users": AUTH_STORE.list_users(user)})
+                return
+            if parsed.path == "/api/admin/users/password":
+                if not self.require_admin_user(user):
+                    return
+                body = self.read_json_body()
+                updated = AUTH_STORE.set_password(user, str(body.get("userId") or body.get("id") or ""), str(body.get("password") or ""))
+                self.send_json({"ok": True, "user": updated})
+                return
             if parsed.path == "/api/capabilities":
                 body = self.read_json_body()
                 robots = parse_robots(body.get("robots"))
@@ -1560,31 +2069,31 @@ class Handler(BaseHTTPRequestHandler):
                 return
             if parsed.path == "/api/generate":
                 body = self.read_json_body()
-                self.send_json(generation_response(body))
+                self.send_json(generation_response(body, current_user=user, workspace_manager=WORKSPACE_MANAGER))
                 return
             if parsed.path == "/api/export":
                 body = self.read_json_body()
-                self.send_json(export_response(body))
+                self.send_json(export_response(body, current_user=user, workspace_manager=WORKSPACE_MANAGER))
                 return
             if parsed.path == "/api/ideas/brainstorm":
                 body = self.read_json_body()
-                self.send_json(brainstorm_ideas_response(body))
+                self.send_json(brainstorm_ideas_response(body, current_user=user, workspace_manager=WORKSPACE_MANAGER))
                 return
             if parsed.path == "/api/workbook/upload":
                 raw = self.read_binary_body()
                 filename, file_data = extract_multipart_file(raw, self.headers.get("Content-Type", ""))
                 if not file_data:
                     raise ValueError("上传文件为空")
-                WORKBOOK_UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
-                saved_name = f"{datetime.now().strftime('%Y%m%d_%H%M%S')}_{filename}"
-                saved_path = WORKBOOK_UPLOAD_DIR / saved_name
-                saved_path.write_bytes(file_data)
-                summary = set_active_workbook(saved_path)
+                saved_path = WORKSPACE_MANAGER.save_upload(user, filename, file_data)
+                summary = WORKSPACE_MANAGER.set_active_workbook(user, saved_path)
                 self.send_json({"ok": True, "summary": summary})
                 return
-            self.send_error(HTTPStatus.NOT_FOUND)
+            self.send_json({"ok": False, "error": "接口不存在"}, status=404)
         except json.JSONDecodeError:
             self.send_json({"ok": False, "error": "请求 JSON 无法解析"}, status=400)
+        except PermissionError as exc:
+            status = 401 if parsed.path == "/api/auth/login" else 403
+            self.send_json({"ok": False, "error": str(exc)}, status=status)
         except ValueError as exc:
             self.send_json({"ok": False, "error": str(exc)}, status=400)
         except Exception as exc:
@@ -1601,6 +2110,7 @@ def main() -> None:
     print(f"Robot demand prototype running at http://127.0.0.1:{port}/")
     print(f"Source workbook: {DEFAULT_SOURCE_XLSX}")
     print(f"Qwen model: {DEFAULT_QWEN_MODEL}")
+    print(f"Admin username: {DEFAULT_ADMIN_USERNAME}")
     try:
         server.serve_forever()
     except KeyboardInterrupt:

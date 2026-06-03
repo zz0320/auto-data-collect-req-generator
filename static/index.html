@@ -9,7 +9,33 @@
     <link rel="stylesheet" href="/styles.css" />
   </head>
   <body>
-    <div class="app-shell">
+    <div id="authGate" class="auth-gate">
+      <section class="auth-panel" aria-labelledby="loginTitle">
+        <div class="brand-lockup">
+          <div class="brand-logo" aria-hidden="true">
+            <img src="/assets/demand-logo.png" alt="" />
+          </div>
+          <div>
+            <h1 id="loginTitle">需求町工坊</h1>
+            <p id="loginHint">使用管理员分配的账号登录</p>
+          </div>
+        </div>
+        <form id="loginForm" class="login-form">
+          <label class="field">
+            <span>用户名</span>
+            <input id="loginUsername" autocomplete="username" />
+          </label>
+          <label class="field">
+            <span>密码</span>
+            <input id="loginPassword" type="password" autocomplete="current-password" />
+          </label>
+          <button id="loginBtn" class="primary-btn" type="submit">登录</button>
+        </form>
+        <div id="authNotice" class="notice hidden" aria-live="polite"></div>
+      </section>
+    </div>
+
+    <div id="appShell" class="app-shell app-locked">
       <header class="topbar">
         <div class="brand-lockup">
           <div class="brand-logo" aria-hidden="true">
@@ -20,9 +46,16 @@
             <p id="schemaLine">正在读取存量数据需求表...</p>
           </div>
         </div>
-        <div class="status-strip" aria-live="polite">
-          <span id="serverStatus" class="status-dot">连接中</span>
-          <span id="sourceStatus">Qwen: 检查中</span>
+        <div class="topbar-side">
+          <div class="status-strip" aria-live="polite">
+            <span id="serverStatus" class="status-dot">连接中</span>
+            <span id="sourceStatus">Qwen: 检查中</span>
+          </div>
+          <div class="user-strip">
+            <span id="userBadge">未登录</span>
+            <button id="adminUsersBtn" class="mini-btn hidden" type="button">用户管理</button>
+            <button id="logoutBtn" class="mini-btn" type="button">退出</button>
+          </div>
         </div>
       </header>
 
@@ -261,6 +294,43 @@
         </section>
       </main>
     </div>
+
+    <section id="adminPanel" class="admin-panel hidden" aria-label="用户管理">
+      <div class="admin-dialog">
+        <div class="panel-head">
+          <div>
+            <h2>用户管理</h2>
+            <p>管理员账户可新增用户、禁用账号、重置密码</p>
+          </div>
+          <button id="closeAdminBtn" class="icon-btn" type="button" title="关闭">
+            <span aria-hidden="true">×</span>
+            <span class="sr-only">关闭</span>
+          </button>
+        </div>
+        <div class="admin-content">
+          <form id="createUserForm" class="admin-form">
+            <label class="field">
+              <span>新用户名</span>
+              <input id="newUsername" autocomplete="off" />
+            </label>
+            <label class="field">
+              <span>初始密码</span>
+              <input id="newPassword" type="password" autocomplete="new-password" />
+            </label>
+            <label class="field">
+              <span>角色</span>
+              <select id="newRole">
+                <option value="user">普通用户</option>
+                <option value="admin">管理员</option>
+              </select>
+            </label>
+            <button id="createUserBtn" class="primary-btn" type="submit">新增用户</button>
+          </form>
+          <div id="adminNotice" class="notice hidden" aria-live="polite"></div>
+          <div id="userList" class="user-list"></div>
+        </div>
+      </div>
+    </section>
 
     <template id="robotTemplate">
       <article class="robot-card">

@@ -14,6 +14,12 @@ DASHSCOPE_API_KEY=你的_key python3 app.py
 http://127.0.0.1:8787/
 ```
 
+首次启动会自动创建管理员账号。默认用户名是 `admin`，默认密码是 `admin123456`。生产或多人使用时建议通过环境变量改掉默认值：
+
+```bash
+ADMIN_USERNAME=admin ADMIN_PASSWORD=更安全的密码 DASHSCOPE_API_KEY=你的_key python3 app.py
+```
+
 默认读取的存量表路径在 `app.py` 中配置，也可以通过环境变量覆盖：
 
 ```bash
@@ -35,6 +41,19 @@ DASHSCOPE_API_KEY=你的_key
 ```
 
 默认模型是 `qwen3.7-max`，界面第 1 步可以从下拉框选择 `qwen3.7-max`、`qwen3-max`、`qwen-plus`、`qwen-turbo`，也可以填写自定义模型名。默认 endpoint 是 DashScope 文本生成接口。
+
+## 多用户与隐私隔离
+
+系统内置账号、会话和管理员用户管理。管理员登录后可以在右上角 `用户管理` 中新增普通用户或管理员、禁用账号、重置密码。普通用户只能使用生成流程，不能访问用户管理接口。
+
+用户数据按账号隔离：
+
+- 账号信息保存在 `work/users/accounts.json`，密码使用 PBKDF2 哈希存储，不保存明文密码。
+- 每个用户上传的 RAG Excel 保存在 `work/users/<用户ID>/rag_uploads/`。
+- 每个用户的当前 RAG 数据源记录在 `work/users/<用户ID>/settings.json`。
+- 每个用户导出的 Excel 保存在 `outputs/users/<用户ID>/generated/`，下载接口只解析当前登录用户目录下的文件名。
+
+因此 Alice 上传的 RAG 表、生成时使用的 RAG 索引和导出的 Excel，Bob 无法通过接口读取或下载。未登录请求不能访问 `/api/schema`、生成、导出、上传或下载接口。
 
 ## 任务阶段
 
@@ -58,7 +77,7 @@ DASHSCOPE_API_KEY=你的_key
 
 ## 生成与导出
 
-第 4 步先调用 Qwen 生成需求，右侧结果区会显示可编辑字段。确认或修改后再点击 `导出 Excel`，导出的文件会保存到 `outputs/generated/`。
+第 4 步先调用 Qwen 生成需求，右侧结果区会显示可编辑字段。确认或修改后再点击 `导出 Excel`，导出的文件会保存到当前用户自己的 `outputs/users/<用户ID>/generated/`。
 
 ## 校验规则
 
@@ -69,4 +88,4 @@ DASHSCOPE_API_KEY=你的_key
 - 非灵巧手不生成拧螺丝、拉拉链、插拔插头等精细手指任务。
 - 输出步骤必须包含 `<动作（中文）><秒数s>` 标签，并同步修正任务步骤数量。
 
-生成的 Excel 保存在 `outputs/generated/`，包含 `生成结果`、`校验日志` 和 `机器人配置` 三个工作表。
+生成的 Excel 包含 `生成结果`、`校验日志` 和 `机器人配置` 三个工作表。

@@ -1,3 +1,21 @@
+const authGate = document.querySelector("#authGate");
+const appShell = document.querySelector("#appShell");
+const loginForm = document.querySelector("#loginForm");
+const loginUsername = document.querySelector("#loginUsername");
+const loginPassword = document.querySelector("#loginPassword");
+const loginBtn = document.querySelector("#loginBtn");
+const authNotice = document.querySelector("#authNotice");
+const userBadge = document.querySelector("#userBadge");
+const adminUsersBtn = document.querySelector("#adminUsersBtn");
+const logoutBtn = document.querySelector("#logoutBtn");
+const adminPanel = document.querySelector("#adminPanel");
+const closeAdminBtn = document.querySelector("#closeAdminBtn");
+const createUserForm = document.querySelector("#createUserForm");
+const newUsername = document.querySelector("#newUsername");
+const newPassword = document.querySelector("#newPassword");
+const newRole = document.querySelector("#newRole");
+const adminNotice = document.querySelector("#adminNotice");
+const userList = document.querySelector("#userList");
 const robotsEl = document.querySelector("#robots");
 const robotTemplate = document.querySelector("#robotTemplate");
 const addRobotBtn = document.querySelector("#addRobotBtn");
@@ -68,6 +86,7 @@ let robotPresets = [];
 let schemaState = null;
 let generatedRows = [];
 let lastGenerationSummary = null;
+let currentUser = null;
 let taskPhases = {
   pretrain: { label: "预训练", maxTargetTimes: 60 },
   posttrain: { label: "后训练", maxTargetTimes: 600 },
@@ -96,6 +115,39 @@ function escapeHtml(value) {
     .replaceAll(">", "&gt;")
     .replaceAll('"', "&quot;")
     .replaceAll("'", "&#039;");
+}
+
+function setNotice(node, message) {
+  if (!node) return;
+  node.textContent = message || "";
+  node.classList.toggle("hidden", !message);
+}
+
+function setAuthenticated(user) {
+  currentUser = user || null;
+  authGate?.classList.toggle("hidden", Boolean(currentUser));
+  appShell?.classList.toggle("app-locked", !currentUser);
+  if (userBadge) {
+    userBadge.textContent = currentUser ? `${currentUser.username} · ${currentUser.role === "admin" ? "管理员" : "普通用户"}` : "未登录";
+  }
+  adminUsersBtn?.classList.toggle("hidden", currentUser?.role !== "admin");
+  if (!currentUser) {
+    adminPanel?.classList.add("hidden");
+    generatedRows = [];
+    lastGenerationSummary = null;
+    resultsEl.innerHTML = "";
+    acceptedMeter.textContent = "0";
+    resultSummary.textContent = "生成后在这里编辑需求，再导出 Excel";
+    downloadLink.href = "#";
+    downloadLink.download = "";
+    downloadLink.classList.add("disabled");
+    downloadLink.setAttribute("aria-disabled", "true");
+  }
+}
+
+function handleAuthExpired() {
+  setAuthenticated(null);
+  setNotice(authNotice, "请先登录。");
 }
 
 function splitIdeas() {
@@ -223,9 +275,12 @@ function setIdeaBusy(isBusy) {
 
 async function jsonFetch(url, options = {}) {
   const headers = options.body instanceof FormData ? options.headers || {} : { "Content-Type": "application/json", ...(options.headers || {}) };
-  const response = await fetch(url, { ...options, headers });
+  const response = await fetch(url, { ...options, headers, credentials: "same-origin" });
   const payload = await response.json().catch(() => ({}));
   if (!response.ok || payload.ok === false) {
+    if (response.status === 401 && !url.includes("/api/session") && !url.includes("/api/auth/login")) {
+      handleAuthExpired();
+    }
     throw new Error(payload.error || `${response.status} ${response.statusText}`);
   }
   return payload;
@@ -737,6 +792,172 @@ async function handleBrainstormIdeas() {
   }
 }
 
+async function loadSession() {
+  try {
+    const payload = await jsonFetch("/api/session");
+    if (payload.authenticated && payload.user) {
+      setAuthenticated(payload.user);
+      setNotice(authNotice, "");
+      await loadSchema();
+    } else {
+      setAuthenticated(null);
+      if (payload.defaultAdminUsername && !loginUsername.value) {
+        loginUsername.value = payload.defaultAdminUsername;
+      }
+    }
+  } catch (error) {
+    setAuthenticated(null);
+    setNotice(authNotice, error.message);
+  }
+}
+
+async function handleLogin(event) {
+  event.preventDefault();
+  const username = loginUsername.value.trim();
+  const password = loginPassword.value;
+  if (!username || !password) {
+    setNotice(authNotice, "请输入用户名和密码。");
+    return;
+  }
+  loginBtn.disabled = true;
+  loginBtn.textContent = "登录中...";
+  setNotice(authNotice, "");
+  try {
+    const payload = await jsonFetch("/api/auth/login", {
+      method: "POST",
+      body: JSON.stringify({ username, password }),
+    });
+    setAuthenticated(payload.user);
+    loginPassword.value = "";
+    await loadSchema();
+  } catch (error) {
+    setNotice(authNotice, error.message);
+  } finally {
+    loginBtn.disabled = false;
+    loginBtn.textContent = "登录";
+  }
+}
+
+async function handleLogout() {
+  try {
+    await jsonFetch("/api/auth/logout", { method: "POST", body: JSON.stringify({}) });
+  } catch (error) {
+    renderNotices([`退出失败：${error.message}`]);
+  } finally {
+    setAuthenticated(null);
+    setNotice(authNotice, "已退出登录。");
+  }
+}
+
+function renderUsers(users = []) {
+  if (!userList) return;
+  if (!users.length) {
+    userList.innerHTML = `<div class="notice">暂无用户</div>`;
+    return;
+  }
+  userList.innerHTML = users
+    .map((user) => {
+      const isSelf = currentUser?.id === user.id;
+      const disabledText = user.disabled ? "已禁用" : "启用中";
+      const roleText = user.role === "admin" ? "管理员" : "普通用户";
+      return `
+        <article class="user-row">
+          <div>
+            <strong>${escapeHtml(user.username)}</strong>
+            <small>${escapeHtml(user.id)} · ${escapeHtml(user.createdAt || "-")}</small>
+          </div>
+          <span class="pill">${escapeHtml(roleText)}</span>
+          <button class="mini-btn" type="button" data-action="toggle-disabled" data-user-id="${escapeHtml(user.id)}" data-next-disabled="${
+            user.disabled ? "false" : "true"
+          }" ${isSelf && !user.disabled ? "disabled" : ""}>${user.disabled ? "启用" : "禁用"}</button>
+          <div class="user-actions">
+            <input data-password-for="${escapeHtml(user.id)}" type="password" placeholder="新密码" autocomplete="new-password" />
+            <button class="mini-btn" type="button" data-action="reset-password" data-user-id="${escapeHtml(user.id)}">重置</button>
+          </div>
+          <small>${escapeHtml(disabledText)}</small>
+        </article>
+      `;
+    })
+    .join("");
+}
+
+async function loadUsers() {
+  const payload = await jsonFetch("/api/admin/users");
+  renderUsers(payload.users || []);
+}
+
+async function openAdminPanel() {
+  if (currentUser?.role !== "admin") return;
+  adminPanel?.classList.remove("hidden");
+  setNotice(adminNotice, "");
+  try {
+    await loadUsers();
+  } catch (error) {
+    setNotice(adminNotice, error.message);
+  }
+}
+
+async function handleCreateUser(event) {
+  event.preventDefault();
+  const username = newUsername.value.trim();
+  const password = newPassword.value;
+  const role = newRole.value;
+  if (!username || !password) {
+    setNotice(adminNotice, "请输入新用户名和初始密码。");
+    return;
+  }
+  try {
+    const payload = await jsonFetch("/api/admin/users", {
+      method: "POST",
+      body: JSON.stringify({ username, password, role }),
+    });
+    newUsername.value = "";
+    newPassword.value = "";
+    newRole.value = "user";
+    renderUsers(payload.users || []);
+    setNotice(adminNotice, `已新增用户：${username}`);
+  } catch (error) {
+    setNotice(adminNotice, error.message);
+  }
+}
+
+async function handleUserListAction(event) {
+  const button = event.target.closest("[data-action]");
+  if (!button) return;
+  const userId = button.dataset.userId;
+  const action = button.dataset.action;
+  if (!userId) return;
+  button.disabled = true;
+  try {
+    if (action === "toggle-disabled") {
+      const payload = await jsonFetch("/api/admin/users/disabled", {
+        method: "POST",
+        body: JSON.stringify({ userId, disabled: button.dataset.nextDisabled === "true" }),
+      });
+      renderUsers(payload.users || []);
+      setNotice(adminNotice, "用户状态已更新。");
+    }
+    if (action === "reset-password") {
+      const input = [...userList.querySelectorAll("[data-password-for]")].find((node) => node.dataset.passwordFor === userId);
+      const password = input?.value || "";
+      if (!password) {
+        setNotice(adminNotice, "请输入新密码。");
+        return;
+      }
+      await jsonFetch("/api/admin/users/password", {
+        method: "POST",
+        body: JSON.stringify({ userId, password }),
+      });
+      input.value = "";
+      setNotice(adminNotice, "密码已重置。");
+    }
+  } catch (error) {
+    setNotice(adminNotice, error.message);
+  } finally {
+    button.disabled = false;
+  }
+}
+
 addRobotBtn.addEventListener("click", () => addRobot({ brand: "", model: "", endEffector: "夹爪", arms: "双臂" }));
 robotPresetList.addEventListener("click", (event) => {
   const card = event.target.closest(".preset-card");
@@ -760,6 +981,12 @@ generateBtn.addEventListener("click", handleGenerate);
 exportBtn?.addEventListener("click", handleExport);
 brainstormIdeasBtn.addEventListener("click", handleBrainstormIdeas);
 workbookFile?.addEventListener("change", handleWorkbookUpload);
+loginForm?.addEventListener("submit", handleLogin);
+logoutBtn?.addEventListener("click", handleLogout);
+adminUsersBtn?.addEventListener("click", openAdminPanel);
+closeAdminBtn?.addEventListener("click", () => adminPanel?.classList.add("hidden"));
+createUserForm?.addEventListener("submit", handleCreateUser);
+userList?.addEventListener("click", handleUserListAction);
 resultsEl.addEventListener("input", (event) => {
   const control = event.target.closest("[data-field]");
   if (!control) return;
@@ -805,4 +1032,4 @@ syncQwenModelCustom();
 syncGenerationCountWithIdeas();
 initialRobots.forEach(addRobot);
 showStep(0);
-loadSchema();
+loadSession();

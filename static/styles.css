@@ -41,6 +41,11 @@ body {
   background-size: 18px 18px;
 }
 
+.hidden,
+[hidden] {
+  display: none !important;
+}
+
 button,
 input,
 textarea,
@@ -54,10 +59,43 @@ a {
   touch-action: manipulation;
 }
 
+.auth-gate {
+  position: fixed;
+  inset: 0;
+  z-index: 20;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background:
+    linear-gradient(90deg, rgba(41, 40, 61, 0.08) 1px, transparent 1px),
+    linear-gradient(0deg, rgba(41, 40, 61, 0.07) 1px, transparent 1px),
+    var(--bg);
+  background-size: 18px 18px;
+}
+
+.auth-panel {
+  display: grid;
+  gap: 18px;
+  width: min(460px, 100%);
+  padding: 22px;
+  border: 3px solid var(--line);
+  background: var(--surface);
+  box-shadow: var(--shadow);
+}
+
+.login-form {
+  display: grid;
+  gap: 12px;
+}
+
 .app-shell {
   width: min(1480px, calc(100vw - 48px));
   margin: 0 auto;
   padding: 24px 0 36px;
+}
+
+.app-shell.app-locked {
+  display: none;
 }
 
 .topbar,
@@ -129,7 +167,14 @@ a {
   gap: 8px;
 }
 
-.status-strip span {
+.topbar-side {
+  display: grid;
+  justify-items: end;
+  gap: 10px;
+}
+
+.status-strip span,
+.user-strip span {
   display: inline-flex;
   align-items: center;
   min-height: 34px;
@@ -138,6 +183,13 @@ a {
   background: #ffe7d3;
   box-shadow: 3px 3px 0 var(--ink);
   font-size: 13px;
+}
+
+.user-strip {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
 }
 
 .status-dot::before {
@@ -751,7 +803,8 @@ a:focus-visible {
 
 .icon-btn,
 .primary-btn,
-.secondary-btn {
+.secondary-btn,
+.mini-btn {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -789,16 +842,27 @@ a:focus-visible {
   font-weight: 800;
 }
 
+.mini-btn {
+  min-width: 84px;
+  min-height: 34px;
+  padding: 6px 10px;
+  background: var(--paper);
+  font-size: 13px;
+  font-weight: 900;
+}
+
 .icon-btn:hover,
 .primary-btn:hover,
-.secondary-btn:hover {
+.secondary-btn:hover,
+.mini-btn:hover {
   transform: translate(2px, 2px);
   box-shadow: 2px 2px 0 var(--ink);
 }
 
 .primary-btn:disabled,
 .secondary-btn:disabled,
-.secondary-btn.disabled {
+.secondary-btn.disabled,
+.mini-btn:disabled {
   opacity: 0.55;
   cursor: not-allowed;
   pointer-events: none;
@@ -865,6 +929,83 @@ a:focus-visible {
   line-height: 1.45;
   overflow-wrap: anywhere;
   word-break: break-word;
+}
+
+.admin-panel {
+  position: fixed;
+  inset: 0;
+  z-index: 30;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: rgba(41, 40, 61, 0.42);
+}
+
+.admin-dialog {
+  width: min(880px, 100%);
+  max-height: min(760px, calc(100vh - 48px));
+  overflow: auto;
+  border: 3px solid var(--line);
+  background: var(--surface);
+  box-shadow: var(--shadow);
+}
+
+.admin-content {
+  display: grid;
+  gap: 14px;
+  padding: 14px;
+}
+
+.admin-form {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+  align-items: end;
+}
+
+.user-list {
+  display: grid;
+  gap: 10px;
+}
+
+.user-row {
+  display: grid;
+  grid-template-columns: minmax(160px, 1fr) 110px 120px minmax(220px, 1.1fr);
+  gap: 10px;
+  align-items: center;
+  min-width: 0;
+  padding: 12px;
+  border: 2px solid var(--line);
+  background: var(--paper);
+  box-shadow: var(--shadow-small);
+}
+
+.user-row strong,
+.user-row small {
+  display: block;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.user-row small {
+  margin-top: 3px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.user-actions {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: center;
+}
+
+.user-actions input {
+  min-width: 0;
+  min-height: 34px;
+  border: 2px solid var(--line);
+  background: var(--paper);
+  padding: 6px 8px;
 }
 
 .results-grid {
@@ -1045,13 +1186,25 @@ textarea.editable-control {
     justify-content: flex-start;
   }
 
+  .topbar-side,
+  .user-strip {
+    justify-items: stretch;
+    justify-content: flex-start;
+  }
+
   .wizard-nav,
   .action-row {
     display: grid;
   }
 
+  .admin-form,
+  .user-row {
+    grid-template-columns: 1fr;
+  }
+
   .primary-btn,
-  .secondary-btn {
+  .secondary-btn,
+  .mini-btn {
     width: 100%;
   }
 }
