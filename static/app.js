@@ -98,7 +98,7 @@ const stepMeta = [
   },
   {
     title: "步骤 3：输入任务构想",
-    hint: "预训练单任务目标次数最多 60 次，后训练最多 600 次；本次输出条数另行填写。",
+    hint: "预训练单任务目标次数固定 60 次，后训练固定 600 次；本次输出条数由 idea 行数决定。",
   },
   {
     title: "步骤 4：生成和导出",
@@ -423,7 +423,7 @@ function syncPhaseControls({ clamp = true } = {}) {
     targetTimesLimit.value = String(maxTargetTimes);
   }
   if (phaseLimitText) {
-    phaseLimitText.textContent = `${phase.label}任务：目标次数最多 ${maxTargetTimes} 次`;
+    phaseLimitText.textContent = `${phase.label}任务：目标次数固定 ${maxTargetTimes} 次`;
   }
   document.querySelectorAll(".phase-option").forEach((node) => {
     const input = node.querySelector('input[name="taskPhase"]');
@@ -819,7 +819,7 @@ function updateReviewSummary() {
       <strong>任务构想</strong>
       <small>${escapeHtml(phase.label)}任务，${ideas.length} 个 idea，本次输出 ${
         generationCount || 0
-      } 条需求；输出条数与 idea 行数匹配，单任务目标次数最多 ${maxTargetTimes} 次。</small>
+      } 条需求；输出条数与 idea 行数匹配，单任务目标次数固定 ${maxTargetTimes} 次。</small>
       <ul>
         ${ideas.slice(0, 6).map((idea) => `<li>${escapeHtml(idea)}</li>`).join("")}
       </ul>
@@ -845,7 +845,7 @@ function renderResults(payload) {
   const summary = lastGenerationSummary;
   const phaseText = summary.taskPhase ? `${summary.taskPhase} · ` : "";
   const requestedText = summary.requested ? `，本次输出 ${summary.requested} 条需求` : "";
-  const targetText = summary.maxTargetTimes ? `，单任务目标次数 ≤ ${summary.maxTargetTimes} 次` : "";
+  const targetText = summary.maxTargetTimes ? `，单任务目标次数固定 ${summary.maxTargetTimes} 次` : "";
   resultSummary.textContent = `${phaseText}已生成 ${generatedRows.length} 条${requestedText}${targetText}，可直接编辑后导出。`;
   sourceStatus.textContent = `Qwen: ${payload.model || currentQwenModel() || "-"}`;
   renderNotices(payload.notices || []);

@@ -1439,7 +1439,7 @@ def qwen_prompt(
     workspace_state: WorkbookState | None = None,
 ) -> tuple[str, str]:
     phase = TASK_PHASES[task_phase]
-    max_target_times = int(phase["maxTargetTimes"])
+    fixed_target_times = int(phase["maxTargetTimes"])
     schema = {
         "headers": TASK_HEADERS,
         "categories": KNOWN_CATEGORIES,
@@ -1465,7 +1465,7 @@ def qwen_prompt(
 
 任务阶段：{phase["label"]}
 阶段策略：{phase["style"]}
-单条任务目标次数上限：{max_target_times} 次
+固定目标次数：{fixed_target_times} 次
 本批次编号：{batch_index}
 本批次必须生成任务需求条数：{task_count}
 任务名称阶段前缀：{task_name_phase_prefix(task_phase)}
@@ -1492,12 +1492,13 @@ def qwen_prompt(
 3. 未配置全身能力时，不生成蹲下、伸展、地面拾取、低柜/高柜任务。
 4. 吸盘末端只生成扁平硬质、可吸附物体任务，不生成布料折叠、液体倾倒、拧螺丝、拉链、插拔插头。
 5. 非灵巧手不要生成拧螺丝、拉拉链、插拔插头等精细手指操作。
-6. 任务步骤数量要和任务步骤描述行数一致；目标次数必须在 1 到 {max_target_times} 之间，这是单条任务要采集的次数，不是生成任务需求的条数。
+6. 任务步骤数量要和任务步骤描述行数一致；目标次数必须固定填写 {fixed_target_times}，不要根据难度、步骤数或历史样例改成其它数值。这是单条任务要采集的次数，不是生成任务需求的条数。
 7. 输出 tasks 数组长度必须等于“本批次必须生成任务需求条数”。
-8. 同一批内任务名称不能重复；不同机器人之间要结合各自能力差异，不要机械复制同一任务。
+8. 每个输入 idea 至多生成一条需求；优先按 idea 顺序生成，任务名称、对象、场景约束和步骤组合都要彼此区分。
 9. 任务简述不要写【预训练】或【后训练】；任务名称必须以“{task_name_phase_prefix(task_phase)}”开头。
 10. 优先参考 RAG 样例的采集设备、场景域、动作标签和步骤粒度；禁止简单复制历史任务名称和步骤。
 11. 严禁生成与存量需求重复或近似重复的任务；任务名称、采集设备、任务简述和步骤组合不得与 RAG 样例一致。如 idea 与历史任务接近，必须更换对象、场景约束或动作组合后再生成。
+12. 不要输出解释、Markdown、数组外字段或多余文本；只返回符合 schema 的 JSON。
 
 输出 JSON schema：
 {{
@@ -1509,7 +1510,7 @@ def qwen_prompt(
       "采集模式": "双臂|单臂_右|单臂_左",
       "场景域分类": "家居家政|通用抓取放置|商超药店|餐饮服务|工业制造",
       "任务步骤描述": "1. ... <Grasp（抓取）><8s>\\n2. ... <Place（放置）><8s>",
-      "目标次数": {max_target_times},
+      "目标次数": {fixed_target_times},
       "数采负责人": "",
       "机器及环境参数": "机器人配置摘要",
       "任务级别": "简易|中等|复杂",
@@ -1665,7 +1666,7 @@ def normalize_level(value: Any) -> str:
 def normalize_task(row: dict[str, Any], robot: RobotProfile | None, serial: int, task_phase: str) -> dict[str, Any]:
     normalized = {header: row.get(header, "") for header in TASK_HEADERS}
     phase = TASK_PHASES.get(task_phase, TASK_PHASES["pretrain"])
-    max_target_times = int(phase["maxTargetTimes"])
+    fixed_target_times = int(phase["maxTargetTimes"])
     normalized["自动编号"] = ""
     normalized["任务ID"] = ""
     normalized["采集时长（小时）"] = ""
@@ -1691,21 +1692,7 @@ def normalize_task(row: dict[str, Any], robot: RobotProfile | None, serial: int,
         normalized["场景域分类"] = infer_category(str(normalized.get("任务名称") or normalized.get("任务简述") or ""))
     if robot and normalized.get("采集模式") not in ["双臂", "单臂_左", "单臂_右"]:
         normalized["采集模式"] = choose_mode(robot, str(normalized.get("任务名称") or ""))
-    try:
-        raw_target = int(float(normalized.get("目标次数") or 0))
-    except (TypeError, ValueError):
-        raw_target = 0
-    target = raw_target
-    target_warning = ""
-    if target < 1:
-        target = target_for_level(str(normalized.get("任务级别")), max_target_times)
-        target_warning = f"目标次数缺失或无效，已按{phase['label']}默认值修正为 {target}"
-    elif target > max_target_times:
-        target = max_target_times
-        target_warning = f"目标次数已按{phase['label']}单任务上限修正：{raw_target} -> {target}"
-    normalized["目标次数"] = target
-    if target_warning:
-        normalized["_target_warning"] = target_warning
+    normalized["目标次数"] = fixed_target_times
     return normalized
 
 
@@ -1993,7 +1980,7 @@ def brainstorm_ideas_response(
 任务阶段：{phase["label"]}
 阶段策略：{phase["style"]}
 计划生成数据需求条数：{generation_count}
-单条任务目标次数上限：{max_target_times} 次
+固定目标次数：{max_target_times} 次
 需要输出 idea 数量：{idea_count}
 
 机器人配置：
@@ -2079,12 +2066,14 @@ def generation_response(
     try:
         remaining = generation_task_count
         batch_index = 1
+        idea_offset = 0
         while remaining > 0:
             batch_count = min(remaining, MAX_QWEN_TASKS_PER_BATCH)
+            batch_ideas = ideas[idea_offset : idea_offset + batch_count] if match_idea_count and ideas else ideas
             generated_rows.extend(
                 call_qwen(
                     robots,
-                    ideas,
+                    batch_ideas,
                     batch_count,
                     task_phase,
                     api_key,
@@ -2095,6 +2084,7 @@ def generation_response(
                 )
             )
             remaining -= batch_count
+            idea_offset += batch_count
             batch_index += 1
     except (HTTPError, URLError, TimeoutError, ValueError, json.JSONDecodeError) as exc:
         raise ValueError(f"Qwen 调用失败，未生成数据需求：{exc}") from exc

@@ -216,14 +216,14 @@
                   <input type="radio" name="taskPhase" value="pretrain" checked />
                   <span>
                     <strong>预训练任务</strong>
-                    <small>底层能力覆盖，单任务目标次数 ≤ 60 次</small>
+                    <small>底层能力覆盖，单任务目标次数固定 60 次</small>
                   </span>
                 </label>
                 <label class="phase-option">
                   <input type="radio" name="taskPhase" value="posttrain" />
                   <span>
                     <strong>后训练任务</strong>
-                    <small>指令泛化和复杂约束，单任务目标次数 ≤ 600 次</small>
+                    <small>指令泛化和复杂约束，单任务目标次数固定 600 次</small>
                   </span>
                 </label>
               </div>
@@ -234,9 +234,9 @@
                   <small class="field-help">Qwen 自动脑洞会按这个数量生成 idea 行。</small>
                 </label>
                 <label class="field">
-                  <span>单任务目标次数上限</span>
+                  <span>单任务固定目标次数</span>
                   <input id="targetTimesLimit" type="number" value="60" readonly />
-                  <small id="phaseLimitText" class="field-help">预训练任务：目标次数最多 60 次</small>
+                  <small id="phaseLimitText" class="field-help">预训练任务：目标次数固定 60 次</small>
                 </label>
               </div>
               <label class="field tall-field idea-field">

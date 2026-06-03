@@ -60,6 +60,45 @@ class GenerateExportFlowTest(unittest.TestCase):
         self.assertEqual(response["rows"][0]["任务名称"], "预-电池入槽")
         self.assertEqual(response["summary"]["generated"], 1)
 
+    def test_generate_slices_ideas_per_qwen_batch(self):
+        original_call_qwen = app.call_qwen
+        original_key = os.environ.get("DASHSCOPE_API_KEY")
+        ideas = [f"任务{i}" for i in range(1, app.MAX_QWEN_TASKS_PER_BATCH + 2)]
+        calls = []
+
+        def fake_call_qwen(robots, batch_ideas, task_count, *args, **kwargs):
+            calls.append((list(batch_ideas), task_count))
+            return [
+                {
+                    **sample_task(f"预-{idea}"),
+                    "任务简述": f"执行{idea}",
+                    "任务步骤描述": f"1. 抓取{idea} <Grasp（抓取）><8s>\n2. 放置{idea} <Place（放置）><8s>",
+                }
+                for idea in batch_ideas[:task_count]
+            ]
+
+        app.call_qwen = fake_call_qwen
+        os.environ["DASHSCOPE_API_KEY"] = "test-key"
+        try:
+            app.generation_response(
+                {
+                    "robots": [sample_robot()],
+                    "taskIdeas": "\n".join(ideas),
+                    "taskPhase": "pretrain",
+                    "generationTaskCount": len(ideas),
+                    "matchIdeaCount": True,
+                }
+            )
+        finally:
+            app.call_qwen = original_call_qwen
+            if original_key is None:
+                os.environ.pop("DASHSCOPE_API_KEY", None)
+            else:
+                os.environ["DASHSCOPE_API_KEY"] = original_key
+
+        self.assertEqual(calls[0], (ideas[: app.MAX_QWEN_TASKS_PER_BATCH], app.MAX_QWEN_TASKS_PER_BATCH))
+        self.assertEqual(calls[1], (ideas[app.MAX_QWEN_TASKS_PER_BATCH :], 1))
+
     def test_export_uses_edited_rows(self):
         captured = {}
         original_write_xlsx = app.write_xlsx

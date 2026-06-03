@@ -42,6 +42,33 @@ class OutputFieldNormalizationTest(unittest.TestCase):
         self.assertEqual(normalized["任务名称"], "后-桌面分拣")
         self.assertEqual(normalized["任务简述"], "按照颜色把积木分到不同托盘")
 
+    def test_target_times_are_fixed_by_task_phase(self):
+        robot = app.RobotProfile("乐聚", "KUAVO", "夹爪", "双臂", False, False, "")
+        row = {
+            "任务名称": "桌面分拣",
+            "任务简述": "把积木分到托盘",
+            "采集设备": "乐聚KUAVO",
+            "采集模式": "双臂",
+            "场景域分类": "通用抓取放置",
+            "任务步骤描述": "1. 抓取积木 <Grasp（抓取）><8s>\n2. 放入托盘 <Place（放置）><8s>",
+            "目标次数": 12,
+        }
+
+        pretrain = app.normalize_task(row, robot, serial=1, task_phase="pretrain")
+        posttrain = app.normalize_task(row, robot, serial=1, task_phase="posttrain")
+
+        self.assertEqual(pretrain["目标次数"], 60)
+        self.assertEqual(posttrain["目标次数"], 600)
+
+    def test_qwen_prompt_requires_fixed_target_times(self):
+        robot = app.RobotProfile("乐聚", "KUAVO", "夹爪", "双臂", False, False, "")
+
+        _, user_prompt = app.qwen_prompt([robot], ["桌面分拣"], 1, "pretrain")
+
+        self.assertIn("固定目标次数：60 次", user_prompt)
+        self.assertIn("目标次数必须固定填写 60", user_prompt)
+        self.assertNotIn("目标次数必须在 1 到", user_prompt)
+
 
 if __name__ == "__main__":
     unittest.main()
