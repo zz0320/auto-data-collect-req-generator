@@ -187,8 +187,12 @@ class QwenApiConfigTest(unittest.TestCase):
 
         self.assertIn("idea-editor", html)
         self.assertIn("taskIdeaGutter", html)
+        self.assertIn("taskIdeaRows", html)
+        self.assertIn("taskIdeaRows", js)
         self.assertIn("syncIdeaLineMarkers", js)
         self.assertIn("idea-line-gutter", css)
+        self.assertIn("idea-line-rows", css)
+        self.assertIn("idea-line-row", css)
         self.assertIn("idea-row-marker", css)
 
     def test_llm_calls_show_visual_progress(self):

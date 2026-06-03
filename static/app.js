@@ -70,6 +70,7 @@ const resultsEl = document.querySelector("#results");
 const generationSummary = document.querySelector("#generationSummary");
 const ideaStatus = document.querySelector("#ideaStatus");
 const taskIdeaGutter = document.querySelector("#taskIdeaGutter");
+const taskIdeaRows = document.querySelector("#taskIdeaRows");
 const ideaProgress = document.querySelector("#ideaProgress");
 const generationProgress = document.querySelector("#generationProgress");
 const phaseLimitText = document.querySelector("#phaseLimitText");
@@ -263,15 +264,22 @@ function splitIdeas() {
 function syncIdeaLineMarkers() {
   if (!taskIdeaGutter || !controls.taskIdeas) return;
   const lineCount = Math.max(1, controls.taskIdeas.value.split("\n").length);
-  const fragment = document.createDocumentFragment();
+  const markerFragment = document.createDocumentFragment();
+  const rowFragment = document.createDocumentFragment();
   for (let index = 0; index < lineCount; index += 1) {
     const marker = document.createElement("span");
     marker.className = "idea-row-marker";
     marker.textContent = String(index + 1);
-    fragment.append(marker);
+    markerFragment.append(marker);
+
+    const row = document.createElement("span");
+    row.className = "idea-line-row";
+    rowFragment.append(row);
   }
-  taskIdeaGutter.replaceChildren(fragment);
+  taskIdeaGutter.replaceChildren(markerFragment);
+  if (taskIdeaRows) taskIdeaRows.replaceChildren(rowFragment);
   taskIdeaGutter.scrollTop = controls.taskIdeas.scrollTop;
+  if (taskIdeaRows) taskIdeaRows.scrollTop = controls.taskIdeas.scrollTop;
 }
 
 function syncGenerationCountWithIdeas(message = "") {
