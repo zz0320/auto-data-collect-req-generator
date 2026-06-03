@@ -179,6 +179,16 @@ class QwenApiConfigTest(unittest.TestCase):
         self.assertIn("handleWorkbookDrop", js)
         self.assertIn("uploadWorkbookFile", js)
 
+    def test_static_ui_refreshes_runtime_state_after_rag_and_api_changes(self):
+        root = Path(__file__).resolve().parents[1]
+        js = (root / "static" / "app.js").read_text(encoding="utf-8")
+
+        self.assertIn("async function refreshRuntimeState", js)
+        self.assertRegex(js, r"async function uploadWorkbookFile[\s\S]+await refreshRuntimeState\(\);")
+        self.assertRegex(js, r"async function handleSaveApiConfig[\s\S]+await refreshRuntimeState\(\);")
+        self.assertRegex(js, r"async function handleTestApiConfig[\s\S]+await refreshRuntimeState\(\);")
+        self.assertRegex(js, r"async function handleClearApiKey[\s\S]+await refreshRuntimeState\(\);")
+
     def test_task_idea_editor_has_visible_line_markers(self):
         root = Path(__file__).resolve().parents[1]
         html = (root / "static" / "index.html").read_text(encoding="utf-8")

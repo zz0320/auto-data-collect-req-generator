@@ -935,6 +935,16 @@ async function loadSchema() {
   }
 }
 
+async function refreshRuntimeState() {
+  const session = await jsonFetch("/api/session");
+  if (session.authenticated && session.user) {
+    setAuthenticated(session.user);
+    await loadSchema();
+  } else {
+    setAuthenticated(null);
+  }
+}
+
 async function uploadWorkbookFile(file) {
   if (!file) return;
   if (!file.name.toLowerCase().endsWith(".xlsx")) {
@@ -957,6 +967,7 @@ async function uploadWorkbookFile(file) {
     updateWorkbookLabels(schema);
     setDot(sheetDot, schema.ok);
     renderNotices([`已切换 RAG Excel：${file.name}，索引 ${Number(schema.ragDocumentCount || 0)} 条。`]);
+    await refreshRuntimeState();
   } catch (error) {
     setDot(sheetDot, false);
     renderNotices([`RAG Excel 切换失败：${error.message}`]);
@@ -1284,7 +1295,8 @@ async function handleSaveApiConfig(event) {
       }),
     });
     applyQwenConfig(payload);
-    setNotice(apiNotice, "API 配置已保存。");
+    await refreshRuntimeState();
+    setNotice(apiNotice, "API 配置已保存，页面状态已刷新。");
   } catch (error) {
     setNotice(apiNotice, `保存失败：${error.message}`);
   } finally {
@@ -1315,7 +1327,7 @@ async function handleTestApiConfig() {
     if (draftKey) {
       setNotice(apiNotice, `临时 Key 连接测试通过：${payload.model}。点击“保存配置”后才会用于生成。`);
     } else {
-      await loadQwenConfig();
+      await refreshRuntimeState();
       setNotice(apiNotice, `连接测试通过：${payload.model}`);
     }
   } catch (error) {
@@ -1339,6 +1351,7 @@ async function handleClearApiKey() {
       }),
     });
     applyQwenConfig(payload);
+    await refreshRuntimeState();
     setNotice(apiNotice, payload.configured ? "已清除用户保存的 Key，当前使用环境变量配置。" : "已清除用户保存的 Key。");
   } catch (error) {
     setNotice(apiNotice, `清除失败：${error.message}`);
