@@ -144,10 +144,10 @@ a {
   place-items: center;
   width: 64px;
   height: 64px;
-  padding: 4px;
+  padding: 0;
   border: 3px solid var(--line);
-  border-radius: 14px;
-  background: #f1edff;
+  border-radius: 0;
+  background: var(--paper);
   box-shadow: var(--shadow-small);
   flex: 0 0 auto;
   overflow: hidden;
