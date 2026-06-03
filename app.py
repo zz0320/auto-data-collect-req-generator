@@ -1811,6 +1811,127 @@ def duplicate_requirement_label(row: dict[str, Any]) -> str:
     return f"{name} / {device}" if device else name
 
 
+def robot_matches_document(robot: RobotProfile, doc: dict[str, Any]) -> bool:
+    device = normalize_duplicate_text(doc.get("采集设备"))
+    if not device:
+        return False
+    primary_names = [
+        robot.name,
+        robot.model,
+        f"{robot.brand}{robot.model}",
+        f"{robot.brand} {robot.model}",
+    ]
+    primary = {normalize_duplicate_text(name) for name in primary_names if normalize_duplicate_text(name)}
+    for name in primary:
+        if len(name) >= 2 and (name in device or device in name):
+            return True
+    brand = normalize_duplicate_text(robot.brand)
+    return not primary and bool(brand and len(brand) >= 2 and (brand in device or device in brand))
+
+
+def top_named_counts(counter: Counter, limit: int, label_map: dict[str, str] | None = None) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    for name, count in counter.most_common(limit):
+        label = label_map.get(name, name) if label_map else name
+        if label:
+            rows.append({"name": label, "count": count})
+    return rows
+
+
+def build_robot_capability_context(
+    robots: list[RobotProfile],
+    rag_documents: list[dict[str, Any]] | None = None,
+    per_robot_task_limit: int = 12,
+) -> list[dict[str, Any]]:
+    documents = rag_documents if rag_documents is not None else RAG_DOCUMENTS
+    contexts: list[dict[str, Any]] = []
+    for robot in robots:
+        matched_docs = [doc for doc in documents if robot_matches_document(robot, doc)]
+        modes = Counter(str(doc.get("采集模式") or "").strip() for doc in matched_docs if str(doc.get("采集模式") or "").strip())
+        categories = Counter(
+            str(doc.get("场景域分类") or "").strip() for doc in matched_docs if str(doc.get("场景域分类") or "").strip()
+        )
+        devices = Counter(str(doc.get("采集设备") or "").strip() for doc in matched_docs if str(doc.get("采集设备") or "").strip())
+        actions: Counter[str] = Counter()
+        task_names: list[str] = []
+        seen_task_names: set[str] = set()
+        for doc in matched_docs:
+            for action in doc.get("动作标签") or []:
+                if action:
+                    actions[str(action)] += 1
+            task_name = str(doc.get("任务名称") or "").strip()
+            task_key = normalize_duplicate_task_name(task_name)
+            if task_name and task_key not in seen_task_names:
+                task_names.append(task_name)
+                seen_task_names.add(task_key)
+        capability = derive_capabilities(robot)
+        contexts.append(
+            {
+                "机器人": robot.name,
+                "用户配置能力": {
+                    "summary": capability["summary"],
+                    "allowedActions": capability["allowedActions"],
+                    "blocked": capability["blocked"],
+                    "cautions": capability["cautions"],
+                },
+                "匹配历史需求数": len(matched_docs),
+                "历史采集设备写法": top_named_counts(devices, 5),
+                "常见采集模式": top_named_counts(modes, 5),
+                "常见场景": top_named_counts(categories, 5),
+                "观察到动作": top_named_counts(actions, 12, CANONICAL_ACTIONS),
+                "历史任务名样例": task_names[:per_robot_task_limit],
+            }
+        )
+    return contexts
+
+
+def existing_requirement_match_label_for_idea(idea: str, rag_documents: list[dict[str, Any]] | None = None) -> str:
+    idea_name = normalize_duplicate_task_name(idea)
+    idea_text = normalize_duplicate_text(idea)
+    if not idea_name:
+        return ""
+    documents = rag_documents if rag_documents is not None else RAG_DOCUMENTS
+    for doc in documents:
+        name = normalize_duplicate_task_name(doc.get("任务名称"))
+        brief = normalize_duplicate_text(doc.get("任务简述"))
+        steps = normalize_duplicate_text(doc.get("任务步骤描述"))
+        if name and idea_name == name:
+            return duplicate_requirement_label(doc)
+        if name and min(len(idea_name), len(name)) >= 4 and (idea_name in name or name in idea_name):
+            return duplicate_requirement_label(doc)
+        if brief and len(idea_text) >= 6 and idea_text in brief:
+            return duplicate_requirement_label(doc)
+        if steps and len(idea_text) >= 8 and idea_text in steps:
+            return duplicate_requirement_label(doc)
+    return ""
+
+
+def clean_brainstorm_ideas(
+    raw_ideas: list[Any],
+    rag_documents: list[dict[str, Any]] | None,
+    limit: int,
+) -> tuple[list[str], list[str]]:
+    cleaned: list[str] = []
+    filtered_existing: list[str] = []
+    seen: set[str] = set()
+    for idea in raw_ideas:
+        text = re.sub(r"^\s*(?:\d+[.、)）]?|[-*]+)\s*", "", str(idea or "").strip())
+        text = re.sub(r"\s+", " ", text).strip()
+        key = normalize_duplicate_task_name(text)
+        if not text or not key or key in seen:
+            continue
+        existing_label = existing_requirement_match_label_for_idea(text, rag_documents)
+        if existing_label:
+            filtered_existing.append(f"{text} => {existing_label}")
+            seen.add(key)
+            continue
+        cleaned.append(text[:80])
+        seen.add(key)
+        if len(cleaned) >= limit:
+            break
+    return cleaned, filtered_existing
+
+
 def build_duplicate_requirement_index(rows: list[dict[str, Any]] | None) -> dict[tuple[str, ...], str]:
     index: dict[tuple[str, ...], str] = {}
     for row in rows or []:
@@ -1954,11 +2075,13 @@ def brainstorm_ideas_response(
     workspace_state = workspace_state_for(current_user, workspace_manager)
     workbook_summary = workspace_state.summary if workspace_state else WORKBOOK_SUMMARY
     rag_documents = workspace_state.rag_documents if workspace_state else RAG_DOCUMENTS
+    candidate_count = min(MAX_GENERATED_TASKS_PER_REQUEST, max(idea_count, idea_count + min(idea_count, 20)))
     robot_text = "\n".join(
         f"- {robot.summary()}\n  允许动作：{', '.join(derive_capabilities(robot)['allowedActions'])}"
         for robot in robots
     )
     workbook_context = workbook_context_for_prompt(example_limit=8, workbook_summary=workbook_summary, rag_documents=rag_documents)
+    robot_capability_context = build_robot_capability_context(robots, rag_documents)
     rag_context = build_rag_context(
         robots,
         [
@@ -1981,13 +2104,17 @@ def brainstorm_ideas_response(
 阶段策略：{phase["style"]}
 计划生成数据需求条数：{generation_count}
 固定目标次数：{max_target_times} 次
-需要输出 idea 数量：{idea_count}
+最终需要保留 idea 数量：{idea_count}
+请输出候选 idea 数量：{candidate_count}（后端会按历史任务去重后截取前 {idea_count} 条）
 
 机器人配置：
 {robot_text}
 
 存量数据摘要：
 {json.dumps(workbook_context, ensure_ascii=False, indent=2)}
+
+存量文档提炼的机器人能力画像（先根据这里判断机器人真实擅长的模式、场景和动作；历史任务名样例只用于避重，禁止复用或只改少量词）：
+{json.dumps(robot_capability_context, ensure_ascii=False, indent=2)}
 
 存量数据 RAG 检索上下文（用于发散 idea，参考既有任务的场景、对象、动作标签和任务颗粒度，但不要照抄任务名）：
 {json.dumps(rag_context, ensure_ascii=False, indent=2)}
@@ -1996,8 +2123,9 @@ def brainstorm_ideas_response(
 1. 每个 idea 是短句，不写完整步骤，不写编号。
 2. idea 必须符合至少一台机器人的实际能力；固定工位不要提出跨房间/巡检/货架往返 idea。
 3. 预训练 idea 偏底层技能覆盖和对象泛化；后训练 idea 偏复杂约束、多对象、多场景指令。
-4. 不要提出与示例任务同名或内容近似重复的 idea；若场景相近，必须更换对象、约束、动作组合或评价目标。
-5. 覆盖不同场景域，优先补足存量数据中相对少的场景。
+4. 先从能力画像提炼该机器人已验证过的动作能力，再发散新对象、新约束、新评价目标。
+5. 不要提出与历史任务名样例、RAG 示例同名或内容近似重复的 idea；若场景相近，必须更换对象、约束、动作组合或评价目标。
+6. 覆盖不同场景域，优先补足存量数据中相对少的场景。
 
 输出 JSON schema：
 {{
@@ -2015,22 +2143,18 @@ def brainstorm_ideas_response(
     ideas = parsed.get("ideas", [])
     if not isinstance(ideas, list):
         raise ValueError("Qwen idea 响应缺少 ideas 数组")
-    cleaned = []
-    seen = set()
-    for idea in ideas:
-        text = re.sub(r"^\d+[.、]\s*", "", str(idea or "").strip())
-        if text and text not in seen:
-            cleaned.append(text[:80])
-            seen.add(text)
+    cleaned, filtered_existing = clean_brainstorm_ideas(ideas, rag_documents, idea_count)
     if not cleaned:
-        raise ValueError("Qwen 未返回有效 idea")
+        raise ValueError("Qwen 返回的 idea 都与存量需求重复，请减少约束或重试。")
     return {
         "ok": True,
         "taskPhase": task_phase,
         "phaseLabel": phase["label"],
         "model": model,
-        "ideas": cleaned[:idea_count],
+        "ideas": cleaned,
         "rationale": str(parsed.get("rationale") or ""),
+        "filteredExistingIdeaCount": len(filtered_existing),
+        "filteredExistingIdeas": filtered_existing[:12],
     }
 
 
