@@ -1,0 +1,318 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>需求町工坊</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <div class="app-shell">
+      <header class="topbar">
+        <div class="brand-lockup">
+          <div class="pixel-badge" aria-hidden="true">
+            <span></span><span></span><span></span><span></span>
+          </div>
+          <div>
+            <h1>需求町工坊</h1>
+            <p id="schemaLine">正在读取存量数据需求表...</p>
+          </div>
+        </div>
+        <div class="status-strip" aria-live="polite">
+          <span id="serverStatus" class="status-dot">连接中</span>
+          <span id="sourceStatus">Qwen: 检查中</span>
+        </div>
+      </header>
+
+      <main class="wizard-layout">
+        <aside class="guide-panel" aria-label="填写步骤">
+          <div class="pixel-scene" aria-hidden="true">
+            <div class="sun"></div>
+            <div class="torii t1"></div>
+            <div class="bot-head"></div>
+            <div class="bot-body"></div>
+            <div class="bot-arm left"></div>
+            <div class="bot-arm right"></div>
+          </div>
+
+          <ol class="step-list">
+            <li class="step-tab active" data-step-indicator="0">
+              <span>1</span>
+              <div>
+                <strong>确认连接</strong>
+                <small>Qwen 与存量表</small>
+              </div>
+            </li>
+            <li class="step-tab" data-step-indicator="1">
+              <span>2</span>
+              <div>
+                <strong>登记机器人</strong>
+                <small>品牌、末端和能力</small>
+              </div>
+            </li>
+            <li class="step-tab" data-step-indicator="2">
+              <span>3</span>
+              <div>
+                <strong>输入任务构想</strong>
+                <small>阶段、idea 和数量</small>
+              </div>
+            </li>
+            <li class="step-tab" data-step-indicator="3">
+              <span>4</span>
+              <div>
+                <strong>审核并生成</strong>
+                <small>校验、飞书和 Excel</small>
+              </div>
+            </li>
+          </ol>
+
+          <div class="guide-note">
+            <strong>生成原则</strong>
+            <p>系统只根据已配置的机器人能力生成需求；不具备移动、全身、双臂或灵巧能力时，对应任务会被拒绝。</p>
+          </div>
+        </aside>
+
+        <section class="panel wizard-panel" aria-labelledby="wizardTitle">
+          <div class="panel-head">
+            <div>
+              <h2 id="wizardTitle">步骤 1：确认连接</h2>
+              <p id="wizardHint">先确认后端、Qwen 和存量表都就绪。</p>
+            </div>
+            <div class="meter">
+              <span id="stepMeter">1/4</span>
+              <span>步骤</span>
+            </div>
+          </div>
+
+          <form id="wizardForm">
+            <section class="wizard-step active" data-step="0" aria-labelledby="stepConnectTitle">
+              <div class="step-card">
+                <div>
+                  <h3 id="stepConnectTitle">系统连接</h3>
+                  <p>这一步只做运行前检查。没有服务端 `DASHSCOPE_API_KEY` 时，后端会直接拒绝启动。</p>
+                </div>
+                <div class="readiness-grid">
+                  <div class="readiness-item">
+                    <span class="readiness-dot" id="qwenDot"></span>
+                    <strong>Qwen API</strong>
+                    <small id="qwenReadiness">检查中</small>
+                  </div>
+                  <div class="readiness-item">
+                    <span class="readiness-dot" id="sheetDot"></span>
+                    <strong>存量表</strong>
+                    <small id="sheetReadiness">检查中</small>
+                  </div>
+                  <div class="readiness-item">
+                    <span class="readiness-dot" id="feishuDot"></span>
+                    <strong>飞书</strong>
+                    <small>可在第 4 步开启</small>
+                  </div>
+                </div>
+              </div>
+
+              <div class="control-grid">
+                <label class="field">
+                  <span>Qwen 模型</span>
+                  <select id="qwenModel">
+                    <option value="qwen3.7-max" selected>qwen3.7-max（最新旗舰，推荐）</option>
+                    <option value="qwen3.7-plus">qwen3.7-plus（最新 Plus）</option>
+                    <option value="qwen3.6-flash">qwen3.6-flash（快速试跑）</option>
+                    <option value="qwen3-max">qwen3-max（原默认）</option>
+                    <option value="qwen-plus">qwen-plus（均衡）</option>
+                    <option value="qwen-turbo">qwen-turbo（低成本）</option>
+                    <option value="custom">自定义模型名</option>
+                  </select>
+                  <input id="qwenModelCustom" class="hidden-field" placeholder="例如 qwen3.7-max-2026-05-20" autocomplete="off" />
+                  <small id="qwenModelHelp" class="field-help">默认使用官方模型页当前靠前的 Qwen3.7-Max。</small>
+                </label>
+                <label class="field">
+                  <span>Qwen Endpoint</span>
+                  <input
+                    id="qwenEndpoint"
+                    value="https://dashscope.aliyuncs.com/api/v1/services/aigc/text-generation/generation"
+                    autocomplete="off"
+                  />
+                </label>
+              </div>
+            </section>
+
+            <section class="wizard-step" data-step="1" aria-labelledby="stepRobotTitle">
+              <div class="step-card">
+                <div>
+                  <h3 id="stepRobotTitle">选择机器人</h3>
+                  <p>先从存量数据需求里归纳出的机型列表选择；没有对应机型时再新增自定义。</p>
+                </div>
+                <button id="addRobotBtn" class="secondary-btn" type="button">
+                  新增自定义
+                </button>
+              </div>
+              <div id="robotPresetList" class="preset-list" aria-live="polite"></div>
+              <div class="section-label">已选择机器人</div>
+              <div id="robots" class="robot-list"></div>
+              <div id="capabilityPreview" class="capability-preview" aria-live="polite"></div>
+            </section>
+
+            <section class="wizard-step" data-step="2" aria-labelledby="stepIdeaTitle">
+              <div class="step-card">
+                <div>
+                  <h3 id="stepIdeaTitle">输入任务构想</h3>
+                  <p>先区分预训练或后训练，再输入 idea。也可以让 Qwen 根据存量表和机器人配置自动脑洞。</p>
+                </div>
+                <button id="brainstormIdeasBtn" class="secondary-btn" type="button">
+                  Qwen 自动脑洞 idea
+                </button>
+              </div>
+              <div class="phase-picker" role="radiogroup" aria-label="任务阶段">
+                <label class="phase-option">
+                  <input type="radio" name="taskPhase" value="pretrain" checked />
+                  <span>
+                    <strong>预训练任务</strong>
+                    <small>底层能力覆盖，单任务目标次数 ≤ 60 次</small>
+                  </span>
+                </label>
+                <label class="phase-option">
+                  <input type="radio" name="taskPhase" value="posttrain" />
+                  <span>
+                    <strong>后训练任务</strong>
+                    <small>指令泛化和复杂约束，单任务目标次数 ≤ 600 次</small>
+                  </span>
+                </label>
+              </div>
+              <label class="field tall-field">
+                <span>Task idea</span>
+                <textarea id="taskIdeas" rows="8">桌面垃圾清理
+餐具摆放
+电池入槽
+超市货架取放</textarea>
+                <small id="ideaStatus" class="field-help" aria-live="polite">每行一个 idea，可手动编辑。</small>
+              </label>
+              <div class="control-grid">
+                <label class="field">
+                  <span>本次输出需求条数</span>
+                  <input id="generationTaskCount" type="number" min="1" max="200" value="12" />
+                  <small class="field-help">控制本次生成几条需求，不是目标次数。</small>
+                </label>
+                <label class="field">
+                  <span>单任务目标次数上限</span>
+                  <input id="targetTimesLimit" type="number" value="60" readonly />
+                  <small id="phaseLimitText" class="field-help">预训练任务：目标次数最多 60 次</small>
+                </label>
+                <label class="field">
+                  <span>数采负责人</span>
+                  <input id="ownerHint" placeholder="可留空，Excel 中仍保留字段" />
+                </label>
+              </div>
+            </section>
+
+            <section class="wizard-step" data-step="3" aria-labelledby="stepReviewTitle">
+              <div class="step-card">
+                <div>
+                  <h3 id="stepReviewTitle">审核并生成</h3>
+                  <p>确认摘要后再调用 Qwen。生成结果会先过能力约束校验，再导出 Excel。</p>
+                </div>
+              </div>
+
+              <div id="reviewSummary" class="review-summary"></div>
+
+              <div class="feishu-box">
+                <label class="check-row">
+                  <input id="sendFeishu" type="checkbox" />
+                  <span>生成完成后推送飞书小助手</span>
+                </label>
+                <label class="field secret-field">
+                  <span>飞书 webhook</span>
+                  <input id="feishuWebhook" type="password" autocomplete="off" placeholder="https://open.feishu.cn/..." />
+                </label>
+                <button id="testFeishuBtn" class="secondary-btn" type="button">测试飞书</button>
+              </div>
+
+              <div class="action-row">
+                <button id="generateBtn" class="primary-btn" type="button">
+                  <span class="btn-mark" aria-hidden="true"></span>
+                  调用 Qwen 生成
+                </button>
+                <a id="downloadLink" class="secondary-btn disabled" href="#" aria-disabled="true">下载 Excel</a>
+              </div>
+            </section>
+
+            <div class="wizard-nav">
+              <button id="prevBtn" class="secondary-btn" type="button">上一步</button>
+              <button id="nextBtn" class="primary-btn" type="button">下一步</button>
+            </div>
+          </form>
+        </section>
+
+        <section class="panel result-panel" aria-labelledby="resultTitle">
+          <div class="panel-head">
+            <div>
+              <h2 id="resultTitle">结果队列</h2>
+              <p id="resultSummary">完成第 4 步后显示结果</p>
+            </div>
+            <div class="meter">
+              <span id="acceptedMeter">0</span>
+              <span>通过</span>
+            </div>
+          </div>
+          <div id="notices" class="notices" aria-live="polite"></div>
+          <div id="results" class="results-grid"></div>
+        </section>
+      </main>
+    </div>
+
+    <template id="robotTemplate">
+      <article class="robot-card">
+        <div class="robot-card-head">
+          <strong class="robot-index">Robot 1</strong>
+          <button class="icon-btn remove-robot" type="button" title="移除机器人">
+            <span aria-hidden="true">×</span>
+            <span class="sr-only">移除机器人</span>
+          </button>
+        </div>
+        <div class="robot-grid">
+          <label class="field">
+            <span>品牌</span>
+            <input data-key="brand" value="星尘智能" autocomplete="off" />
+          </label>
+          <label class="field">
+            <span>机型</span>
+            <input data-key="model" value="S1" autocomplete="off" />
+          </label>
+          <label class="field">
+            <span>末端执行器</span>
+            <select data-key="endEffector">
+              <option>夹爪</option>
+              <option>吸盘</option>
+              <option>灵巧手</option>
+              <option>二指夹爪</option>
+              <option>无</option>
+            </select>
+          </label>
+          <label class="field">
+            <span>采集模式</span>
+            <select data-key="arms">
+              <option>双臂</option>
+              <option>单臂_右</option>
+              <option>单臂_左</option>
+            </select>
+          </label>
+        </div>
+        <div class="toggle-grid">
+          <label class="check-row">
+            <input data-key="mobile" type="checkbox" />
+            <span>移动能力</span>
+          </label>
+          <label class="check-row">
+            <input data-key="wholeBody" type="checkbox" />
+            <span>全身能力</span>
+          </label>
+        </div>
+        <label class="field">
+          <span>补充约束</span>
+          <textarea data-key="notes" rows="3" placeholder="例：仅桌面高度；不处理液体；夹爪最大负载 1kg"></textarea>
+        </label>
+      </article>
+    </template>
+
+    <script src="/app.js"></script>
+  </body>
+</html>

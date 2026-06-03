@@ -1,0 +1,1327 @@
+from __future__ import annotations
+
+import json
+import os
+import re
+import uuid
+from collections import Counter
+from dataclasses import dataclass
+from datetime import datetime
+from http import HTTPStatus
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
+from typing import Any
+from urllib import request
+from urllib.error import HTTPError, URLError
+from urllib.parse import urlparse
+
+try:
+    import openpyxl
+    from openpyxl import Workbook
+    from openpyxl.styles import Alignment, Font, PatternFill
+except ImportError as exc:  # pragma: no cover - shown in /api/health
+    openpyxl = None
+    Workbook = None
+    Alignment = Font = PatternFill = None
+    OPENPYXL_IMPORT_ERROR = exc
+else:
+    OPENPYXL_IMPORT_ERROR = None
+
+
+ROOT = Path(__file__).resolve().parent
+STATIC_DIR = ROOT / "static"
+OUTPUT_DIR = ROOT / "outputs" / "generated"
+
+
+def load_local_env() -> None:
+    env_path = ROOT / ".env.local"
+    if not env_path.exists():
+        return
+    for raw_line in env_path.read_text(encoding="utf-8").splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        key = key.strip()
+        value = value.strip().strip('"').strip("'")
+        if key and key not in os.environ:
+            os.environ[key] = value
+
+
+load_local_env()
+
+DEFAULT_QWEN_MODEL = os.getenv("QWEN_MODEL", "qwen3.7-max").strip() or "qwen3.7-max"
+DEFAULT_QWEN_ENDPOINT = (
+    os.getenv("DASHSCOPE_ENDPOINT", "https://dashscope.aliyuncs.com/api/v1/services/aigc/text-generation/generation").strip()
+    or "https://dashscope.aliyuncs.com/api/v1/services/aigc/text-generation/generation"
+)
+DEFAULT_SOURCE_XLSX = Path(
+    os.getenv(
+        "SOURCE_XLSX",
+        "/Users/kenton/Downloads/模型训练记录表_数据需求总表同步_收集结果-有效.xlsx",
+    )
+)
+
+QWEN_MODEL_OPTIONS = [
+    {
+        "id": "qwen3.7-max",
+        "label": "Qwen3.7-Max",
+        "tag": "最新旗舰",
+        "description": "官方模型页当前千问文本生成首位，适合高质量数据需求生成。",
+    },
+    {
+        "id": "qwen3.7-plus",
+        "label": "Qwen3.7-Plus",
+        "tag": "最新 Plus",
+        "description": "较新的 Plus 模型，适合兼顾效果与成本。",
+    },
+    {
+        "id": "qwen3.6-flash",
+        "label": "Qwen3.6-Flash",
+        "tag": "快",
+        "description": "官方模型页列出的低延迟模型，适合快速试跑。",
+    },
+    {
+        "id": "qwen3-max",
+        "label": "Qwen3-Max",
+        "tag": "兼容",
+        "description": "原型此前默认模型，保留用于兼容。",
+    },
+    {
+        "id": "qwen-plus",
+        "label": "Qwen-Plus",
+        "tag": "稳妥",
+        "description": "DashScope API 示例常用模型，成本和效果均衡。",
+    },
+    {
+        "id": "qwen-turbo",
+        "label": "Qwen-Turbo",
+        "tag": "低成本",
+        "description": "适合低成本批量草稿。",
+    },
+]
+
+TASK_HEADERS = [
+    "自动编号",
+    "任务ID",
+    "采集时长（小时）",
+    "提交时间",
+    "提交人",
+    "填写日期",
+    "任务名称",
+    "任务简述",
+    "采集设备",
+    "采集模式",
+    "场景域分类",
+    "任务步骤描述",
+    "目标次数",
+    "数采负责人",
+    "机器及环境参数",
+    "任务级别",
+    "任务步骤数量",
+]
+
+CANONICAL_ACTIONS = {
+    "Grasp": "Grasp（抓取）",
+    "Pick": "Pick（拿起）",
+    "Place": "Place（放置）",
+    "Release": "Release（释放）",
+    "Transfer": "Transfer（转移）",
+    "Alignment": "Alignment（对准）",
+    "Move": "Move（移动）",
+    "Navigate": "Navigate（导航）",
+    "Carry": "Carry（携带）",
+    "Transport": "Transport（搬运）",
+    "Open": "Open（打开）",
+    "Close": "Close（关闭）",
+    "Pull": "Pull（拉）",
+    "Push": "Push（推）",
+    "Press": "Press（按压）",
+    "Lift": "Lift（抬起）",
+    "Lower": "Lower（放下）",
+    "Fold": "Fold（折叠）",
+    "Unfold": "Unfold（展开）",
+    "Straighten": "Straighten（整理）",
+    "Flip": "Flip（翻转）",
+    "HandOver": "HandOver（传递）",
+    "Hold": "Hold（握住）",
+    "Pour": "Pour（倒）",
+    "Scoop": "Scoop（舀）",
+    "Insert": "Insert（插入）",
+    "Rotate": "Rotate（旋转）",
+    "Pack": "Pack（打包）",
+    "Stack": "Stack（堆叠）",
+    "Wipe": "Wipe（擦拭）",
+    "Touch": "Touch（触摸）",
+    "Several Times": "Several Times（多次重复抓取放置）",
+    "Crouch": "Crouch（蹲下）",
+    "Stretch": "Stretch（伸展）",
+    "Plug": "Plug（插插头）",
+    "Unplug": "Unplug（拔插头）",
+    "Screw": "Screw（拧紧）",
+    "Unscrew": "Unscrew（拧松）",
+    "Zip": "Zip（拉上）",
+    "Unzip": "Unzip（拉开）",
+}
+
+KNOWN_CATEGORIES = ["家居家政", "通用抓取放置", "商超药店", "餐饮服务", "工业制造"]
+KNOWN_LEVELS = ["简易", "中等", "复杂"]
+TASK_PHASES = {
+    "pretrain": {
+        "label": "预训练",
+        "maxTargetTimes": 60,
+        "style": "基础能力覆盖，优先生成短步骤、单技能或低组合度任务，覆盖抓取、放置、对准、释放、简单转移等底层能力。",
+    },
+    "posttrain": {
+        "label": "后训练",
+        "maxTargetTimes": 600,
+        "style": "指令跟随和场景泛化，允许生成更长步骤、多对象、多约束和多场景任务，但仍必须受机器人真实能力限制。",
+    },
+}
+MAX_QWEN_TASKS_PER_BATCH = 30
+MAX_GENERATED_TASKS_PER_REQUEST = 200
+MOBILE_ACTIONS = {"Move", "Navigate", "Carry", "Transport"}
+BIMANUAL_ACTIONS = {"Fold", "Unfold", "HandOver"}
+WHOLE_BODY_ACTIONS = {"Crouch", "Stretch"}
+FINE_ACTIONS = {"Screw", "Unscrew", "Zip", "Unzip", "Plug", "Unplug", "Twist", "Insert"}
+SUCTION_FORBIDDEN_ACTIONS = BIMANUAL_ACTIONS | FINE_ACTIONS | {
+    "Pull",
+    "Scoop",
+    "Pour",
+    "Wipe",
+    "Hold",
+}
+
+BRAND_PREFIXES = [
+    "傅利叶",
+    "星尘智能",
+    "星海图",
+    "智元",
+    "乐聚",
+    "松灵",
+    "方舟无限",
+    "Franka",
+    "UR",
+]
+
+
+def split_device_name(device: str) -> tuple[str, str]:
+    text = str(device or "").strip()
+    if not text:
+        return "", ""
+    for prefix in BRAND_PREFIXES:
+        if text.startswith(prefix):
+            return prefix, text[len(prefix) :].strip()
+    match = re.match(r"^([A-Za-z\u4e00-\u9fff]+?)([A-Za-z0-9_-]+)$", text)
+    if match and match.group(1) != text:
+        return match.group(1), match.group(2)
+    return text, ""
+
+
+def action_key_from_workbook_label(label: str) -> str | None:
+    normalized = str(label or "").strip()
+    if re.fullmatch(r"\d+(?:\.\d+)?\s*s", normalized, flags=re.IGNORECASE):
+        return None
+    first = re.split(r"[（(]", normalized, maxsplit=1)[0].strip()
+    return first or None
+
+
+@dataclass
+class RobotProfile:
+    brand: str
+    model: str
+    end_effector: str
+    arms: str
+    mobile: bool
+    whole_body: bool
+    notes: str
+
+    @property
+    def name(self) -> str:
+        brand = self.brand.strip()
+        model = self.model.strip()
+        if brand and model:
+            return f"{brand}{model}" if model.startswith(brand) else f"{brand}{model}"
+        return brand or model or "未命名机器人"
+
+    @property
+    def is_dual_arm(self) -> bool:
+        return self.arms == "双臂"
+
+    @property
+    def is_left_only(self) -> bool:
+        return self.arms == "单臂_左"
+
+    @property
+    def is_right_only(self) -> bool:
+        return self.arms == "单臂_右"
+
+    @property
+    def is_dexterous(self) -> bool:
+        text = f"{self.end_effector} {self.notes}"
+        return any(token in text for token in ["灵巧手", "五指", "多指", "dexterous", "Dexterous"])
+
+    @property
+    def has_manipulator(self) -> bool:
+        return bool(self.end_effector.strip()) and self.end_effector.strip() not in ["无", "仅相机", "摄像头"]
+
+    def summary(self) -> str:
+        mobile = "可移动" if self.mobile else "固定工位"
+        body = "具备全身/蹲伸能力" if self.whole_body else "不假设全身能力"
+        return f"{self.name}；{self.arms}；末端执行器：{self.end_effector or '未填写'}；{mobile}；{body}；备注：{self.notes or '无'}"
+
+
+def now_text() -> str:
+    return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+
+def today_midnight_text() -> str:
+    return datetime.now().strftime("%Y-%m-%d 00:00:00")
+
+
+def load_workbook_summary() -> dict[str, Any]:
+    if OPENPYXL_IMPORT_ERROR:
+        return {"ok": False, "error": f"openpyxl unavailable: {OPENPYXL_IMPORT_ERROR}"}
+    if not DEFAULT_SOURCE_XLSX.exists():
+        return {"ok": False, "error": f"source workbook not found: {DEFAULT_SOURCE_XLSX}"}
+
+    wb = openpyxl.load_workbook(DEFAULT_SOURCE_XLSX, read_only=True, data_only=True)
+    ws = wb.active
+    raw_headers = list(next(ws.iter_rows(min_row=1, max_row=1, values_only=True)))
+    headers = [header for header in raw_headers if header]
+    header_index = {header: idx for idx, header in enumerate(raw_headers) if header}
+    devices: dict[str, int] = {}
+    categories: dict[str, int] = {}
+    modes: dict[str, int] = {}
+    levels: dict[str, int] = {}
+    robot_stats: dict[str, dict[str, Any]] = {}
+    examples: list[dict[str, Any]] = []
+    max_auto_id = 0
+
+    for row in ws.iter_rows(min_row=2, values_only=True):
+        if not any(row):
+            continue
+        device_idx = header_index.get("采集设备")
+        mode_idx = header_index.get("采集模式")
+        category_idx = header_index.get("场景域分类")
+        steps_idx = header_index.get("任务步骤描述")
+        device_value = str(row[device_idx] or "").strip() if device_idx is not None and device_idx < len(row) else ""
+        mode_value = str(row[mode_idx] or "").strip() if mode_idx is not None and mode_idx < len(row) else ""
+        category_value = str(row[category_idx] or "").strip() if category_idx is not None and category_idx < len(row) else ""
+        steps_value = str(row[steps_idx] or "") if steps_idx is not None and steps_idx < len(row) else ""
+
+        if device_value:
+            stats = robot_stats.setdefault(
+                device_value,
+                {
+                    "count": 0,
+                    "modes": Counter(),
+                    "categories": Counter(),
+                    "actions": Counter(),
+                    "mobile_mentions": 0,
+                    "whole_body_mentions": 0,
+                },
+            )
+            stats["count"] += 1
+            if mode_value:
+                stats["modes"][mode_value] += 1
+            if category_value:
+                for category_part in re.split(r"[,，]\s*", category_value):
+                    if category_part:
+                        stats["categories"][category_part] += 1
+            for action_label in re.findall(r"<([^<>]+)>", steps_value):
+                action_key = action_key_from_workbook_label(action_label)
+                if action_key:
+                    stats["actions"][action_key] += 1
+            if re.search(r"机器人移动到|底盘|导航到|巡检|跨房间|移动到[^。；\n]*(货架|分拣台|桌子旁|目标点)", steps_value):
+                stats["mobile_mentions"] += 1
+            if re.search(r"蹲下|弯腰|地面|低柜|高柜|脚边", steps_value):
+                stats["whole_body_mentions"] += 1
+
+        auto_value = row[header_index.get("自动编号", 0)]
+        if isinstance(auto_value, (int, float)):
+            max_auto_id = max(max_auto_id, int(auto_value))
+        elif isinstance(auto_value, str) and auto_value.strip().isdigit():
+            max_auto_id = max(max_auto_id, int(auto_value.strip()))
+        for column, bucket in [
+            ("采集设备", devices),
+            ("场景域分类", categories),
+            ("采集模式", modes),
+            ("任务级别", levels),
+        ]:
+            idx = header_index.get(column)
+            value = row[idx] if idx is not None and idx < len(row) else None
+            if value:
+                bucket[str(value)] = bucket.get(str(value), 0) + 1
+        if len(examples) < 8:
+            item = {header: row[header_index[header]] for header in TASK_HEADERS if header in header_index}
+            if item.get("任务名称") and item.get("任务步骤描述"):
+                examples.append(item)
+
+    robot_presets = []
+    for device, stats in sorted(robot_stats.items(), key=lambda item: item[1]["count"], reverse=True):
+        actions = stats["actions"]
+        dominant_mode = stats["modes"].most_common(1)[0][0] if stats["modes"] else "双臂"
+        common_categories = [name for name, _ in stats["categories"].most_common(3)]
+        common_actions = [CANONICAL_ACTIONS.get(name, name) for name, _ in actions.most_common(5)]
+        brand, model = split_device_name(device)
+        mobile = stats["mobile_mentions"] > 0
+        whole_body = stats["whole_body_mentions"] > 0 or any(actions.get(action, 0) > 0 for action in WHOLE_BODY_ACTIONS)
+        dexterous_evidence = {"Screw", "Unscrew", "Zip", "Unzip", "Plug", "Unplug"}
+        end_effector = "灵巧手" if any(actions.get(action, 0) > 0 for action in dexterous_evidence) else "夹爪"
+        notes_parts = [f"从存量 {stats['count']} 条需求归纳"]
+        if common_categories:
+            notes_parts.append(f"常见场景：{'、'.join(common_categories)}")
+        if common_actions:
+            notes_parts.append(f"常见动作：{'、'.join(common_actions[:3])}")
+        if not mobile:
+            notes_parts.append("未从存量动作中观察到移动底盘任务，默认按固定工位处理")
+        if not whole_body:
+            notes_parts.append("未从存量动作中观察到全身/蹲伸任务，默认不假设全身能力")
+        robot_presets.append(
+            {
+                "name": device,
+                "brand": brand,
+                "model": model,
+                "endEffector": end_effector,
+                "arms": dominant_mode if dominant_mode in ["双臂", "单臂_左", "单臂_右"] else "双臂",
+                "mobile": mobile,
+                "wholeBody": whole_body,
+                "notes": "；".join(notes_parts),
+                "count": stats["count"],
+                "categories": common_categories,
+                "actions": common_actions,
+                "modes": stats["modes"].most_common(3),
+            }
+        )
+
+    return {
+        "ok": True,
+        "source": str(DEFAULT_SOURCE_XLSX),
+        "sheet": ws.title,
+        "rows": max(ws.max_row - 1, 0),
+        "columns": ws.max_column,
+        "headers": headers[:17],
+        "max_auto_id": max_auto_id,
+        "devices": sorted(devices.items(), key=lambda x: x[1], reverse=True)[:30],
+        "categories": sorted(categories.items(), key=lambda x: x[1], reverse=True),
+        "modes": sorted(modes.items(), key=lambda x: x[1], reverse=True),
+        "levels": sorted(levels.items(), key=lambda x: x[1], reverse=True),
+        "actions": list(CANONICAL_ACTIONS.values()),
+        "robotPresets": robot_presets,
+        "taskPhases": TASK_PHASES,
+        "qwenModelOptions": QWEN_MODEL_OPTIONS,
+        "examples": examples,
+    }
+
+
+WORKBOOK_SUMMARY = load_workbook_summary()
+
+
+def parse_bool(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "yes", "y", "on", "是"}
+    return bool(value)
+
+
+def parse_task_phase(value: Any) -> str:
+    text = str(value or "").strip().lower()
+    if text in {"posttrain", "post", "after", "后训练", "后训练任务"}:
+        return "posttrain"
+    return "pretrain"
+
+
+def workbook_context_for_prompt(example_limit: int = 8) -> dict[str, Any]:
+    examples = []
+    for item in WORKBOOK_SUMMARY.get("examples", [])[:example_limit]:
+        examples.append(
+            {
+                "任务名称": item.get("任务名称"),
+                "采集设备": item.get("采集设备"),
+                "采集模式": item.get("采集模式"),
+                "场景域分类": item.get("场景域分类"),
+                "任务级别": item.get("任务级别"),
+                "任务简述": item.get("任务简述"),
+                "任务步骤描述": str(item.get("任务步骤描述") or "")[:260],
+            }
+        )
+    return {
+        "rows": WORKBOOK_SUMMARY.get("rows", 0),
+        "topDevices": WORKBOOK_SUMMARY.get("devices", [])[:12],
+        "topCategories": WORKBOOK_SUMMARY.get("categories", [])[:8],
+        "topModes": WORKBOOK_SUMMARY.get("modes", [])[:5],
+        "topLevels": WORKBOOK_SUMMARY.get("levels", [])[:5],
+        "actions": WORKBOOK_SUMMARY.get("actions", [])[:30],
+        "examples": examples,
+    }
+
+
+def parse_robots(raw: Any) -> list[RobotProfile]:
+    robots = raw if isinstance(raw, list) else []
+    parsed: list[RobotProfile] = []
+    for item in robots:
+        if not isinstance(item, dict):
+            continue
+        parsed.append(
+            RobotProfile(
+                brand=str(item.get("brand", "")).strip(),
+                model=str(item.get("model", "")).strip(),
+                end_effector=str(item.get("endEffector", item.get("end_effector", ""))).strip(),
+                arms=str(item.get("arms", "双臂")).strip() or "双臂",
+                mobile=parse_bool(item.get("mobile", False)),
+                whole_body=parse_bool(item.get("wholeBody", item.get("whole_body", False))),
+                notes=str(item.get("notes", "")).strip(),
+            )
+        )
+    return parsed
+
+
+def split_task_ideas(value: Any) -> list[str]:
+    if isinstance(value, list):
+        ideas = [str(item).strip() for item in value]
+    else:
+        text = str(value or "")
+        ideas = [part.strip(" -\t\r\n") for part in re.split(r"[\n；;]+", text)]
+    return [idea for idea in ideas if idea]
+
+
+def derive_capabilities(robot: RobotProfile) -> dict[str, Any]:
+    allowed = {"Grasp", "Pick", "Place", "Release", "Transfer", "Alignment", "Press", "Push", "Pull", "Open", "Close", "Lift", "Lower", "Flip", "Rotate", "Touch", "Several Times"}
+    blocked: list[str] = []
+    cautions: list[str] = []
+
+    if not robot.has_manipulator:
+        allowed = set()
+        blocked.append("未配置可操作末端执行器，不能生成抓取/放置类数据采集任务")
+
+    if robot.mobile:
+        allowed.update(MOBILE_ACTIONS)
+    else:
+        blocked.append("未配置移动能力，禁止生成跨位置移动、货架往返、巡检搬运任务")
+
+    if robot.is_dual_arm:
+        allowed.update({"HandOver", "Hold", "Fold", "Unfold", "Straighten", "Pack", "Stack", "Wipe"})
+    else:
+        blocked.append("单臂配置不能生成需要双手协作的折叠、双手传递、双手保持任务")
+
+    if robot.whole_body:
+        allowed.update(WHOLE_BODY_ACTIONS)
+    else:
+        cautions.append("未配置全身能力时，只生成桌面或工位高度任务")
+
+    if robot.is_dexterous:
+        allowed.update(FINE_ACTIONS | {"Scoop", "Pour", "Wipe"})
+    elif "吸盘" in robot.end_effector:
+        allowed.difference_update(SUCTION_FORBIDDEN_ACTIONS)
+        cautions.append("吸盘优先生成扁平、硬质、表面可吸附物体任务")
+    else:
+        cautions.append("非灵巧手配置不生成拧螺丝、拉拉链、插拔插头等精细任务")
+
+    return {
+        "name": robot.name,
+        "summary": robot.summary(),
+        "allowedActions": sorted(CANONICAL_ACTIONS[action] for action in allowed if action in CANONICAL_ACTIONS),
+        "blocked": blocked,
+        "cautions": cautions,
+    }
+
+
+def infer_category(idea: str) -> str:
+    if re.search(r"药|商品|货架|超市|商店|扫码|补货", idea):
+        return "商超药店"
+    if re.search(r"餐|碗|盘|杯|筷|勺|厨房|面包|饮料|咖啡", idea):
+        return "餐饮服务"
+    if re.search(r"电池|工件|装配|螺丝|线束|产线|包装盒|质检", idea):
+        return "工业制造"
+    if re.search(r"抓取|放置|摆放|分拣", idea):
+        return "通用抓取放置"
+    return "家居家政"
+
+
+def choose_mode(robot: RobotProfile, idea: str) -> str:
+    if robot.is_dual_arm and re.search(r"折|叠|双手|配对|铺平|传递|大件", idea):
+        return "双臂"
+    if robot.is_left_only:
+        return "单臂_左"
+    if robot.is_right_only:
+        return "单臂_右"
+    return "双臂" if robot.is_dual_arm else "单臂_右"
+
+
+def task_level(step_count: int, actions: list[str]) -> str:
+    action_set = set(actions)
+    if step_count >= 8 or action_set & (BIMANUAL_ACTIONS | WHOLE_BODY_ACTIONS | FINE_ACTIONS):
+        return "复杂"
+    if step_count >= 5 or action_set & {"Open", "Close", "Pour", "Scoop", "Wipe", "Navigate", "Move"}:
+        return "中等"
+    return "简易"
+
+
+def target_for_level(level: str, max_target_times: int | None = None) -> int:
+    target = {"简易": 300, "中等": 180, "复杂": 80}.get(level, 120)
+    if max_target_times is not None:
+        target = min(target, max_target_times)
+    return max(target, 1)
+
+
+def clean_task_name(text: str) -> str:
+    text = re.sub(r"\s+", "", text.strip())
+    text = re.sub(r"[^\w\u4e00-\u9fff_-]+", "", text)
+    return text[:24] or "任务"
+
+
+def format_steps(items: list[tuple[str, str, int]]) -> str:
+    lines = []
+    for index, (description, action, seconds) in enumerate(items, start=1):
+        action_text = CANONICAL_ACTIONS.get(action, action)
+        lines.append(f"{index}. {description} <{action_text}><{seconds}s>")
+    return "\n".join(lines)
+
+
+def seconds_from_steps(steps: str) -> int:
+    total = 0
+    for match in re.finditer(r"<\s*(\d+(?:\.\d+)?)\s*s\s*>", steps, flags=re.IGNORECASE):
+        total += int(float(match.group(1)))
+    return total
+
+
+def line_count_from_steps(steps: str) -> int:
+    lines = [line for line in str(steps or "").splitlines() if line.strip()]
+    if lines:
+        return len(lines)
+    actions = extract_action_keys(steps)
+    return len(actions)
+
+
+def build_task_row(
+    robot: RobotProfile,
+    idea: str,
+    index: int,
+    max_auto_id: int,
+    steps: list[tuple[str, str, int]],
+) -> dict[str, Any]:
+    step_text = format_steps(steps)
+    actions = [action for _, action, _ in steps]
+    level = task_level(len(steps), actions)
+    target = target_for_level(level)
+    total_seconds = seconds_from_steps(step_text)
+    duration_hours = round((target * max(total_seconds, 1)) / 3600, 2)
+    name = f"{clean_task_name(idea)}_{index}"
+    workspace = "可移动场景" if robot.mobile else "固定工位"
+    brief = f"基于“{idea}”生成，限定在{workspace}和已配置末端执行器能力内完成。"
+    return {
+        "自动编号": str(max_auto_id + index),
+        "任务ID": uuid.uuid4().hex,
+        "采集时长（小时）": duration_hours,
+        "提交时间": now_text(),
+        "提交人": "AI需求生成器",
+        "填写日期": today_midnight_text(),
+        "任务名称": name,
+        "任务简述": brief,
+        "采集设备": robot.name,
+        "采集模式": choose_mode(robot, idea),
+        "场景域分类": infer_category(idea),
+        "任务步骤描述": step_text,
+        "目标次数": target,
+        "数采负责人": "",
+        "机器及环境参数": robot.summary(),
+        "任务级别": level,
+        "任务步骤数量": len(steps),
+    }
+
+
+def qwen_prompt(
+    robots: list[RobotProfile],
+    ideas: list[str],
+    task_count: int,
+    task_phase: str,
+    batch_index: int = 1,
+) -> tuple[str, str]:
+    phase = TASK_PHASES[task_phase]
+    max_target_times = int(phase["maxTargetTimes"])
+    schema = {
+        "headers": TASK_HEADERS,
+        "categories": KNOWN_CATEGORIES,
+        "levels": KNOWN_LEVELS,
+        "actions": list(CANONICAL_ACTIONS.values()),
+        "format": "任务步骤描述必须逐行编号，每一行末尾必须包含 <动作（中文）><秒数s>。",
+    }
+    workbook_context = workbook_context_for_prompt(example_limit=6)
+    robot_text = "\n".join(
+        f"- {robot.summary()}\n  允许动作：{', '.join(derive_capabilities(robot)['allowedActions'])}"
+        for robot in robots
+    )
+    ideas_text = "\n".join(f"- {idea}" for idea in ideas) or "- 根据存量任务风格生成保守的桌面操作任务"
+    system = (
+        "你是机器人自动数据采集需求生成器。你必须严守机器人实际能力，不确定就不要生成。"
+        "禁止编造移动、全身、双臂、灵巧操作能力。输出只能是 JSON，不要 Markdown。"
+    )
+    user = f"""
+请根据存量数据需求表格式，生成新的数据采集需求。
+
+任务阶段：{phase["label"]}
+阶段策略：{phase["style"]}
+单条任务目标次数上限：{max_target_times} 次
+本批次编号：{batch_index}
+本批次必须生成任务需求条数：{task_count}
+
+机器人配置：
+{robot_text}
+
+新的任务 idea：
+{ideas_text}
+
+存量数据摘要：
+{json.dumps(workbook_context, ensure_ascii=False, indent=2)}
+
+字段和动作要求：
+{json.dumps(schema, ensure_ascii=False, indent=2)}
+
+硬性规则：
+1. 固定工位机器人不能包含 Move（移动）、Navigate（导航）、Carry（携带）、Transport（搬运）等底盘移动任务。
+2. 单臂机器人不能生成 Fold（折叠）、Unfold（展开）、HandOver（传递）等明显双臂协作任务。
+3. 未配置全身能力时，不生成蹲下、伸展、地面拾取、低柜/高柜任务。
+4. 吸盘末端只生成扁平硬质、可吸附物体任务，不生成布料折叠、液体倾倒、拧螺丝、拉链、插拔插头。
+5. 非灵巧手不要生成拧螺丝、拉拉链、插拔插头等精细手指操作。
+6. 任务步骤数量要和任务步骤描述行数一致；目标次数必须在 1 到 {max_target_times} 之间，这是单条任务要采集的次数，不是生成任务需求的条数。
+7. 输出 tasks 数组长度必须等于“本批次必须生成任务需求条数”。
+8. 同一批内任务名称不能重复；不同机器人之间要结合各自能力差异，不要机械复制同一任务。
+9. 任务简述开头必须带上【{phase["label"]}】。
+
+输出 JSON schema：
+{{
+  "tasks": [
+    {{
+      "任务名称": "string",
+      "任务简述": "string",
+      "采集设备": "必须等于某个机器人名称",
+      "采集模式": "双臂|单臂_右|单臂_左",
+      "场景域分类": "家居家政|通用抓取放置|商超药店|餐饮服务|工业制造",
+      "任务步骤描述": "1. ... <Grasp（抓取）><8s>\\n2. ... <Place（放置）><8s>",
+      "目标次数": {max_target_times},
+      "数采负责人": "",
+      "机器及环境参数": "机器人配置摘要",
+      "任务级别": "简易|中等|复杂",
+      "任务步骤数量": 4
+    }}
+  ]
+}}
+""".strip()
+    return system, user
+
+
+def extract_json_payload(text: str) -> dict[str, Any]:
+    text = text.strip()
+    if text.startswith("```"):
+        text = re.sub(r"^```(?:json)?", "", text).strip()
+        text = re.sub(r"```$", "", text).strip()
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        match = re.search(r"\{.*\}", text, flags=re.S)
+        if not match:
+            raise
+        return json.loads(match.group(0))
+
+
+def call_qwen_json(system: str, user: str, api_key: str, model: str, endpoint: str, timeout: int = 90) -> dict[str, Any]:
+    payload = {
+        "model": model or "qwen3-max",
+        "input": {
+            "messages": [
+                {"role": "system", "content": system},
+                {"role": "user", "content": user},
+            ]
+        },
+        "parameters": {
+            "result_format": "message",
+            "temperature": 0.35,
+            "response_format": {"type": "json_object"},
+        },
+    }
+    data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+    req = request.Request(
+        endpoint,
+        data=data,
+        headers={
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+        },
+        method="POST",
+    )
+    with request.urlopen(req, timeout=timeout) as resp:
+        body = json.loads(resp.read().decode("utf-8"))
+    content = ""
+    try:
+        content = body["output"]["choices"][0]["message"]["content"]
+    except (KeyError, IndexError, TypeError):
+        content = body.get("output", {}).get("text") or body.get("output", "")
+    if isinstance(content, list):
+        content = "".join(str(part.get("text", part)) if isinstance(part, dict) else str(part) for part in content)
+    return extract_json_payload(str(content))
+
+
+def call_qwen(
+    robots: list[RobotProfile],
+    ideas: list[str],
+    task_count: int,
+    task_phase: str,
+    api_key: str,
+    model: str,
+    endpoint: str,
+    batch_index: int = 1,
+) -> list[dict[str, Any]]:
+    system, user = qwen_prompt(robots, ideas, task_count, task_phase, batch_index)
+    parsed = call_qwen_json(system, user, api_key, model, endpoint, timeout=90)
+    tasks = parsed.get("tasks", parsed if isinstance(parsed, list) else [])
+    if not isinstance(tasks, list):
+        raise ValueError("Qwen response JSON did not contain a tasks array")
+    return [task for task in tasks if isinstance(task, dict)]
+
+
+def action_key_from_label(label: str) -> str | None:
+    normalized = label.strip()
+    if re.fullmatch(r"\d+(?:\.\d+)?\s*s", normalized, flags=re.IGNORECASE):
+        return None
+    first = re.split(r"[（(]", normalized, maxsplit=1)[0].strip()
+    for key, canonical in CANONICAL_ACTIONS.items():
+        if first.lower() == key.lower() or normalized == canonical:
+            return key
+    return first or None
+
+
+def extract_action_keys(steps: str) -> list[str]:
+    keys: list[str] = []
+    for label in re.findall(r"<([^<>]+)>", str(steps or "")):
+        key = action_key_from_label(label)
+        if key:
+            keys.append(key)
+    return keys
+
+
+def match_robot(row: dict[str, Any], robots: list[RobotProfile]) -> RobotProfile | None:
+    device = str(row.get("采集设备") or "").strip()
+    if not robots:
+        return None
+    for robot in robots:
+        if device == robot.name:
+            return robot
+    for robot in robots:
+        if device and (device in robot.name or robot.name in device):
+            return robot
+    return robots[0] if len(robots) == 1 else None
+
+
+def normalize_level(value: Any) -> str:
+    text = str(value or "").strip()
+    return {"易": "简易", "中": "中等", "难": "复杂"}.get(text, text if text in KNOWN_LEVELS else "简易")
+
+
+def normalize_task(row: dict[str, Any], robot: RobotProfile | None, serial: int, task_phase: str) -> dict[str, Any]:
+    normalized = {header: row.get(header, "") for header in TASK_HEADERS}
+    phase = TASK_PHASES.get(task_phase, TASK_PHASES["pretrain"])
+    max_target_times = int(phase["maxTargetTimes"])
+    if not normalized["自动编号"]:
+        normalized["自动编号"] = str(int(WORKBOOK_SUMMARY.get("max_auto_id") or 0) + serial)
+    if not normalized["任务ID"]:
+        normalized["任务ID"] = uuid.uuid4().hex
+    if not normalized["提交时间"]:
+        normalized["提交时间"] = now_text()
+    if not normalized["提交人"]:
+        normalized["提交人"] = "AI需求生成器"
+    if not normalized["填写日期"]:
+        normalized["填写日期"] = today_midnight_text()
+    if robot and not normalized["采集设备"]:
+        normalized["采集设备"] = robot.name
+    if robot and not normalized["机器及环境参数"]:
+        normalized["机器及环境参数"] = robot.summary()
+
+    steps = str(normalized.get("任务步骤描述") or "")
+    step_count = line_count_from_steps(steps)
+    normalized["任务步骤数量"] = step_count or normalized.get("任务步骤数量") or 0
+    actions = extract_action_keys(steps)
+    normalized["任务级别"] = normalize_level(normalized.get("任务级别") or task_level(step_count, actions))
+    if normalized.get("场景域分类") not in KNOWN_CATEGORIES:
+        normalized["场景域分类"] = infer_category(str(normalized.get("任务名称") or normalized.get("任务简述") or ""))
+    if robot and normalized.get("采集模式") not in ["双臂", "单臂_左", "单臂_右"]:
+        normalized["采集模式"] = choose_mode(robot, str(normalized.get("任务名称") or ""))
+    try:
+        raw_target = int(float(normalized.get("目标次数") or 0))
+    except (TypeError, ValueError):
+        raw_target = 0
+    target = raw_target
+    target_warning = ""
+    if target < 1:
+        target = target_for_level(str(normalized.get("任务级别")), max_target_times)
+        target_warning = f"目标次数缺失或无效，已按{phase['label']}默认值修正为 {target}"
+    elif target > max_target_times:
+        target = max_target_times
+        target_warning = f"目标次数已按{phase['label']}单任务上限修正：{raw_target} -> {target}"
+    normalized["目标次数"] = target
+    if target_warning:
+        normalized["_target_warning"] = target_warning
+    if not normalized.get("采集时长（小时）") or target != raw_target:
+        normalized["采集时长（小时）"] = round((target * max(seconds_from_steps(steps), 1)) / 3600, 2)
+    return normalized
+
+
+def validate_task(row: dict[str, Any], robots: list[RobotProfile], serial: int, task_phase: str) -> dict[str, Any]:
+    robot = match_robot(row, robots)
+    normalized = normalize_task(row, robot, serial, task_phase)
+    errors: list[str] = []
+    warnings: list[str] = []
+    target_warning = str(normalized.pop("_target_warning", "") or "")
+    if target_warning:
+        warnings.append(target_warning)
+
+    if robot is None:
+        errors.append("采集设备无法匹配输入的机器人配置")
+    elif not robot.has_manipulator:
+        errors.append("机器人缺少可操作末端执行器，不能生成操作类任务")
+
+    required = ["任务名称", "任务简述", "采集设备", "采集模式", "场景域分类", "任务步骤描述"]
+    for field in required:
+        if not str(normalized.get(field) or "").strip():
+            errors.append(f"缺少字段：{field}")
+
+    steps = str(normalized.get("任务步骤描述") or "")
+    action_keys = extract_action_keys(steps)
+    unknown_actions = sorted({key for key in action_keys if key not in CANONICAL_ACTIONS})
+    if unknown_actions:
+        errors.append(f"包含未知动作：{', '.join(unknown_actions)}")
+    if not action_keys:
+        errors.append("任务步骤缺少动作标签，例如 <Grasp（抓取）><8s>")
+    if seconds_from_steps(steps) <= 0:
+        errors.append("任务步骤缺少秒数标签，例如 <8s>")
+
+    declared_step_count = int(normalized.get("任务步骤数量") or 0)
+    actual_step_count = line_count_from_steps(steps)
+    if declared_step_count != actual_step_count and actual_step_count > 0:
+        warnings.append(f"任务步骤数量已按实际行数修正：{declared_step_count} -> {actual_step_count}")
+        normalized["任务步骤数量"] = actual_step_count
+
+    if robot:
+        mode = normalized.get("采集模式")
+        if mode == "双臂" and not robot.is_dual_arm:
+            errors.append("采集模式为双臂，但机器人配置不是双臂")
+        if mode == "单臂_左" and robot.is_right_only:
+            errors.append("采集模式为左臂，但机器人配置仅右臂")
+        if mode == "单臂_右" and robot.is_left_only:
+            errors.append("采集模式为右臂，但机器人配置仅左臂")
+
+        action_set = set(action_keys)
+        if action_set & MOBILE_ACTIONS and not robot.mobile:
+            errors.append("任务包含移动/导航/搬运动作，但机器人未配置移动能力")
+        if action_set & BIMANUAL_ACTIONS and not robot.is_dual_arm:
+            errors.append("任务包含双臂协作类动作，但机器人不是双臂配置")
+        if action_set & WHOLE_BODY_ACTIONS and not robot.whole_body:
+            errors.append("任务包含蹲下/伸展动作，但机器人未配置全身能力")
+        if "吸盘" in robot.end_effector and action_set & SUCTION_FORBIDDEN_ACTIONS:
+            errors.append("吸盘末端不适合该任务中的布料/液体/精细或强夹持动作")
+        if not robot.is_dexterous and action_set & FINE_ACTIONS:
+            errors.append("非灵巧手配置不适合拧螺丝、拉链、插拔等精细动作")
+
+        text = f"{normalized.get('任务名称')} {normalized.get('任务简述')} {steps}"
+        if not robot.mobile and re.search(r"机器人移动到|导航到|巡检|跨房间|货架往返|搬运到", text):
+            errors.append("文本描述需要移动底盘，但机器人未配置移动能力")
+        if not robot.whole_body and re.search(r"蹲|地面|脚边|低柜|高柜|弯腰", text):
+            errors.append("文本描述需要全身/低位/高位能力，但机器人未配置全身能力")
+        if "吸盘" in robot.end_effector and re.search(r"毛巾|衣服|袜|布料|倒水|液体|螺丝|拉链|插头", text):
+            errors.append("吸盘配置不适合文本中的柔性、液体或精细对象")
+
+    status = "accepted" if not errors else "rejected"
+    return {
+        "status": status,
+        "row": normalized,
+        "errors": errors,
+        "warnings": warnings,
+        "robot": robot.name if robot else "",
+    }
+
+
+def validate_tasks(rows: list[dict[str, Any]], robots: list[RobotProfile], task_phase: str) -> list[dict[str, Any]]:
+    return [validate_task(row, robots, index, task_phase) for index, row in enumerate(rows, start=1)]
+
+
+def write_xlsx(validations: list[dict[str, Any]], robots: list[RobotProfile]) -> Path:
+    if OPENPYXL_IMPORT_ERROR:
+        raise RuntimeError(f"openpyxl unavailable: {OPENPYXL_IMPORT_ERROR}")
+    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "生成结果"
+    log_ws = wb.create_sheet("校验日志")
+    robot_ws = wb.create_sheet("机器人配置")
+
+    accepted = [item["row"] for item in validations if item["status"] == "accepted"]
+    ws.append(TASK_HEADERS)
+    for row in accepted:
+        ws.append([row.get(header, "") for header in TASK_HEADERS])
+
+    log_ws.append(["状态", "任务名称", "采集设备", "问题", "提示"])
+    for item in validations:
+        row = item["row"]
+        log_ws.append(
+            [
+                item["status"],
+                row.get("任务名称", ""),
+                row.get("采集设备", ""),
+                "\n".join(item["errors"]),
+                "\n".join(item["warnings"]),
+            ]
+        )
+
+    robot_ws.append(["机器人", "末端执行器", "采集模式", "移动能力", "全身能力", "能力摘要"])
+    for robot in robots:
+        robot_ws.append(
+            [
+                robot.name,
+                robot.end_effector,
+                robot.arms,
+                "是" if robot.mobile else "否",
+                "是" if robot.whole_body else "否",
+                robot.summary(),
+            ]
+        )
+
+    for sheet in [ws, log_ws, robot_ws]:
+        sheet.freeze_panes = "A2"
+        for cell in sheet[1]:
+            cell.font = Font(bold=True, color="FFFFFF")
+            cell.fill = PatternFill("solid", fgColor="283044")
+            cell.alignment = Alignment(horizontal="center", vertical="center")
+        for column in sheet.columns:
+            max_len = max(len(str(cell.value or "")) for cell in column)
+            width = min(max(max_len + 2, 10), 42)
+            sheet.column_dimensions[column[0].column_letter].width = width
+        for row in sheet.iter_rows():
+            for cell in row:
+                current = cell.alignment
+                cell.alignment = Alignment(
+                    horizontal=current.horizontal,
+                    vertical="top",
+                    text_rotation=current.text_rotation,
+                    wrap_text=True,
+                    shrink_to_fit=current.shrink_to_fit,
+                    indent=current.indent,
+                )
+
+    filename = f"generated_data_requirements_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
+    output = OUTPUT_DIR / filename
+    wb.save(output)
+    return output
+
+
+def brainstorm_ideas_response(body: dict[str, Any]) -> dict[str, Any]:
+    robots = parse_robots(body.get("robots"))
+    if not robots:
+        raise ValueError("请先选择或新增至少一台机器人，再自动脑洞 idea")
+    task_phase = parse_task_phase(body.get("taskPhase"))
+    phase = TASK_PHASES[task_phase]
+    max_target_times = int(phase["maxTargetTimes"])
+    generation_count = int(float(body.get("generationTaskCount") or body.get("targetTaskCount") or 12))
+    if generation_count < 1:
+        raise ValueError("本次输出需求条数必须大于 0")
+    if generation_count > MAX_GENERATED_TASKS_PER_REQUEST:
+        raise ValueError(f"本次最多生成 {MAX_GENERATED_TASKS_PER_REQUEST} 条需求；这和单任务目标次数不是同一个概念")
+    api_key = os.getenv("DASHSCOPE_API_KEY", "").strip()
+    if not api_key:
+        raise ValueError("服务未配置 DASHSCOPE_API_KEY，无法调用 Qwen 自动脑洞")
+    idea_count = int(float(body.get("ideaCount") or (18 if task_phase == "pretrain" else 36)))
+    idea_count = max(6, min(idea_count, 60))
+    model = str(body.get("qwenModel") or DEFAULT_QWEN_MODEL).strip() or DEFAULT_QWEN_MODEL
+    endpoint = str(body.get("qwenEndpoint") or DEFAULT_QWEN_ENDPOINT).strip() or DEFAULT_QWEN_ENDPOINT
+    robot_text = "\n".join(
+        f"- {robot.summary()}\n  允许动作：{', '.join(derive_capabilities(robot)['allowedActions'])}"
+        for robot in robots
+    )
+    workbook_context = workbook_context_for_prompt(example_limit=8)
+    system = (
+        "你是机器人数据采集需求的任务 idea 策划器。你只输出 JSON。"
+        "必须结合存量数据分布和机器人真实能力提出新 idea；不确定的能力不要假设。"
+    )
+    user = f"""
+请自动脑洞一批新的机器人数据采集 task idea，供后续生成数据需求表使用。
+
+任务阶段：{phase["label"]}
+阶段策略：{phase["style"]}
+计划生成数据需求条数：{generation_count}
+单条任务目标次数上限：{max_target_times} 次
+需要输出 idea 数量：{idea_count}
+
+机器人配置：
+{robot_text}
+
+存量数据摘要：
+{json.dumps(workbook_context, ensure_ascii=False, indent=2)}
+
+要求：
+1. 每个 idea 是短句，不写完整步骤，不写编号。
+2. idea 必须符合至少一台机器人的实际能力；固定工位不要提出跨房间/巡检/货架往返 idea。
+3. 预训练 idea 偏底层技能覆盖和对象泛化；后训练 idea 偏复杂约束、多对象、多场景指令。
+4. 避免和示例任务完全同名，但可以在场景和对象上合理扩展。
+5. 覆盖不同场景域，优先补足存量数据中相对少的场景。
+
+输出 JSON schema：
+{{
+  "ideas": ["idea 1", "idea 2"],
+  "rationale": "一句话说明这些 idea 如何参考了存量数据"
+}}
+""".strip()
+    parsed = call_qwen_json(system, user, api_key, model, endpoint, timeout=60)
+    ideas = parsed.get("ideas", [])
+    if not isinstance(ideas, list):
+        raise ValueError("Qwen idea 响应缺少 ideas 数组")
+    cleaned = []
+    seen = set()
+    for idea in ideas:
+        text = re.sub(r"^\d+[.、]\s*", "", str(idea or "").strip())
+        if text and text not in seen:
+            cleaned.append(text[:80])
+            seen.add(text)
+    if not cleaned:
+        raise ValueError("Qwen 未返回有效 idea")
+    return {
+        "ok": True,
+        "taskPhase": task_phase,
+        "phaseLabel": phase["label"],
+        "model": model,
+        "ideas": cleaned[:idea_count],
+        "rationale": str(parsed.get("rationale") or ""),
+    }
+
+
+def post_feishu(webhook: str, text: str) -> dict[str, Any]:
+    payload = {"msg_type": "text", "content": {"text": text}}
+    data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+    req = request.Request(
+        webhook,
+        data=data,
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    with request.urlopen(req, timeout=20) as resp:
+        body = resp.read().decode("utf-8")
+    try:
+        return json.loads(body)
+    except json.JSONDecodeError:
+        return {"raw": body}
+
+
+def generation_response(body: dict[str, Any]) -> dict[str, Any]:
+    robots = parse_robots(body.get("robots"))
+    if not robots:
+        raise ValueError("至少需要输入一台机器人配置")
+
+    ideas = split_task_ideas(body.get("taskIdeas"))
+    task_phase = parse_task_phase(body.get("taskPhase"))
+    phase = TASK_PHASES[task_phase]
+    max_target_times = int(phase["maxTargetTimes"])
+    fallback_count = int(body.get("countPerRobot") or 3) * max(len(robots), 1)
+    generation_task_count = int(float(body.get("generationTaskCount") or body.get("targetTaskCount") or fallback_count))
+    if generation_task_count < 1:
+        raise ValueError("本次输出需求条数必须大于 0")
+    if generation_task_count > MAX_GENERATED_TASKS_PER_REQUEST:
+        raise ValueError(f"本次最多生成 {MAX_GENERATED_TASKS_PER_REQUEST} 条需求；这和单任务目标次数不是同一个概念")
+    api_key = os.getenv("DASHSCOPE_API_KEY", "").strip()
+    if not api_key:
+        raise ValueError("服务未配置 DASHSCOPE_API_KEY，无法启动 Qwen 生成链路")
+    model = str(body.get("qwenModel") or DEFAULT_QWEN_MODEL).strip() or DEFAULT_QWEN_MODEL
+    endpoint = str(body.get("qwenEndpoint") or DEFAULT_QWEN_ENDPOINT).strip() or DEFAULT_QWEN_ENDPOINT
+    source = "qwen"
+    notices: list[str] = []
+
+    generated_rows: list[dict[str, Any]] = []
+    try:
+        remaining = generation_task_count
+        batch_index = 1
+        while remaining > 0:
+            batch_count = min(remaining, MAX_QWEN_TASKS_PER_BATCH)
+            generated_rows.extend(call_qwen(robots, ideas, batch_count, task_phase, api_key, model, endpoint, batch_index))
+            remaining -= batch_count
+            batch_index += 1
+    except (HTTPError, URLError, TimeoutError, ValueError, json.JSONDecodeError) as exc:
+        raise ValueError(f"Qwen 调用失败，未生成数据需求：{exc}") from exc
+
+    validations = validate_tasks(generated_rows, robots, task_phase)
+    accepted_count = sum(1 for item in validations if item["status"] == "accepted")
+    rejected_count = len(validations) - accepted_count
+    output_path = write_xlsx(validations, robots)
+    download_url = f"/download/{output_path.name}"
+
+    webhook = str(body.get("feishuWebhook") or os.getenv("FEISHU_WEBHOOK", "")).strip()
+    feishu_result: dict[str, Any] | None = None
+    if webhook and parse_bool(body.get("sendFeishu", False)):
+        text = (
+            "机器人数据需求生成完成\n"
+            f"来源：{source}\n"
+            f"通过：{accepted_count}，拒绝：{rejected_count}\n"
+            f"文件：{download_url}\n"
+            f"时间：{now_text()}"
+        )
+        try:
+            feishu_result = post_feishu(webhook, text)
+        except (HTTPError, URLError, TimeoutError) as exc:
+            notices.append(f"飞书 webhook 推送失败：{exc}")
+
+    return {
+        "ok": True,
+        "source": source,
+        "model": model,
+        "endpoint": endpoint,
+        "notices": notices,
+        "downloadUrl": download_url,
+        "downloadName": output_path.name,
+        "summary": {
+            "generated": len(validations),
+            "accepted": accepted_count,
+            "rejected": rejected_count,
+            "requested": generation_task_count,
+            "taskPhase": phase["label"],
+            "maxTargetTimes": max_target_times,
+        },
+        "capabilities": [derive_capabilities(robot) for robot in robots],
+        "items": validations,
+        "feishu": feishu_result,
+    }
+
+
+class Handler(BaseHTTPRequestHandler):
+    server_version = "RobotDemandPrototype/0.1"
+
+    def log_message(self, fmt: str, *args: Any) -> None:
+        print(f"[{now_text()}] {self.address_string()} {fmt % args}")
+
+    def send_json(self, payload: dict[str, Any], status: int = 200) -> None:
+        data = json.dumps(payload, ensure_ascii=False, default=str).encode("utf-8")
+        self.send_response(status)
+        self.send_header("Content-Type", "application/json; charset=utf-8")
+        self.send_header("Content-Length", str(len(data)))
+        self.end_headers()
+        self.wfile.write(data)
+
+    def send_file(self, path: Path, content_type: str) -> None:
+        if not path.exists() or not path.is_file():
+            self.send_error(HTTPStatus.NOT_FOUND)
+            return
+        data = path.read_bytes()
+        self.send_response(200)
+        self.send_header("Content-Type", content_type)
+        self.send_header("Content-Length", str(len(data)))
+        self.end_headers()
+        self.wfile.write(data)
+
+    def read_json_body(self) -> dict[str, Any]:
+        length = int(self.headers.get("Content-Length") or 0)
+        raw = self.rfile.read(length) if length else b"{}"
+        if len(raw) > 2_000_000:
+            raise ValueError("请求体过大")
+        return json.loads(raw.decode("utf-8"))
+
+    def do_OPTIONS(self) -> None:
+        self.send_response(204)
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Access-Control-Allow-Headers", "Content-Type")
+        self.send_header("Access-Control-Allow-Methods", "GET,POST,OPTIONS")
+        self.end_headers()
+
+    def do_GET(self) -> None:
+        parsed = urlparse(self.path)
+        path = parsed.path
+        if path == "/api/health":
+            self.send_json(
+                {
+                    "ok": OPENPYXL_IMPORT_ERROR is None,
+                    "time": now_text(),
+                    "sourceWorkbook": str(DEFAULT_SOURCE_XLSX),
+                    "openpyxlError": str(OPENPYXL_IMPORT_ERROR) if OPENPYXL_IMPORT_ERROR else "",
+                    "qwenConfigured": bool(os.getenv("DASHSCOPE_API_KEY", "").strip()),
+                    "qwenModel": DEFAULT_QWEN_MODEL,
+                    "qwenModelOptions": QWEN_MODEL_OPTIONS,
+                    "qwenEndpoint": DEFAULT_QWEN_ENDPOINT,
+                }
+            )
+            return
+        if path == "/api/schema":
+            self.send_json(WORKBOOK_SUMMARY)
+            return
+        if path.startswith("/download/"):
+            filename = Path(path).name
+            self.send_file(
+                OUTPUT_DIR / filename,
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            )
+            return
+        if path == "/":
+            self.send_file(STATIC_DIR / "index.html", "text/html; charset=utf-8")
+            return
+
+        requested = (STATIC_DIR / path.lstrip("/")).resolve()
+        if STATIC_DIR in requested.parents:
+            suffix = requested.suffix.lower()
+            content_type = {
+                ".css": "text/css; charset=utf-8",
+                ".js": "application/javascript; charset=utf-8",
+                ".png": "image/png",
+                ".jpg": "image/jpeg",
+                ".jpeg": "image/jpeg",
+            }.get(suffix, "application/octet-stream")
+            self.send_file(requested, content_type)
+            return
+        self.send_error(HTTPStatus.NOT_FOUND)
+
+    def do_POST(self) -> None:
+        parsed = urlparse(self.path)
+        try:
+            if parsed.path == "/api/capabilities":
+                body = self.read_json_body()
+                robots = parse_robots(body.get("robots"))
+                self.send_json({"ok": True, "capabilities": [derive_capabilities(robot) for robot in robots]})
+                return
+            if parsed.path == "/api/generate":
+                body = self.read_json_body()
+                self.send_json(generation_response(body))
+                return
+            if parsed.path == "/api/ideas/brainstorm":
+                body = self.read_json_body()
+                self.send_json(brainstorm_ideas_response(body))
+                return
+            if parsed.path == "/api/feishu/test":
+                body = self.read_json_body()
+                webhook = str(body.get("feishuWebhook") or os.getenv("FEISHU_WEBHOOK", "")).strip()
+                if not webhook:
+                    raise ValueError("缺少飞书 webhook")
+                result = post_feishu(webhook, f"飞书小助手连通性测试：{now_text()}")
+                self.send_json({"ok": True, "result": result})
+                return
+            self.send_error(HTTPStatus.NOT_FOUND)
+        except json.JSONDecodeError:
+            self.send_json({"ok": False, "error": "请求 JSON 无法解析"}, status=400)
+        except ValueError as exc:
+            self.send_json({"ok": False, "error": str(exc)}, status=400)
+        except Exception as exc:
+            self.send_json({"ok": False, "error": f"{type(exc).__name__}: {exc}"}, status=500)
+
+
+def main() -> None:
+    if not os.getenv("DASHSCOPE_API_KEY", "").strip():
+        raise SystemExit("DASHSCOPE_API_KEY is required. Configure Qwen before starting this prototype.")
+    if OPENPYXL_IMPORT_ERROR:
+        raise SystemExit(f"openpyxl is required: {OPENPYXL_IMPORT_ERROR}")
+    port = int(os.getenv("PORT", "8787"))
+    server = ThreadingHTTPServer(("127.0.0.1", port), Handler)
+    print(f"Robot demand prototype running at http://127.0.0.1:{port}/")
+    print(f"Source workbook: {DEFAULT_SOURCE_XLSX}")
+    print(f"Qwen model: {DEFAULT_QWEN_MODEL}")
+    try:
+        server.serve_forever()
+    except KeyboardInterrupt:
+        print("Shutting down")
+    finally:
+        server.server_close()
+
+
+if __name__ == "__main__":
+    main()
