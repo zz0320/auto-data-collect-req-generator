@@ -5,7 +5,7 @@
 ## 运行
 
 ```bash
-DASHSCOPE_API_KEY=你的_key python3 app.py
+python3 app.py
 ```
 
 打开：
@@ -17,30 +17,32 @@ http://127.0.0.1:8787/
 首次启动会自动创建管理员账号。默认用户名是 `admin`，默认密码是 `admin123456`。生产或多人使用时建议通过环境变量改掉默认值：
 
 ```bash
-ADMIN_USERNAME=admin ADMIN_PASSWORD=更安全的密码 DASHSCOPE_API_KEY=你的_key python3 app.py
+ADMIN_USERNAME=admin ADMIN_PASSWORD=更安全的密码 python3 app.py
 ```
 
 默认读取的存量表路径在 `app.py` 中配置，也可以通过环境变量覆盖：
 
 ```bash
-SOURCE_XLSX=/path/to/source.xlsx DASHSCOPE_API_KEY=你的_key python3 app.py
+SOURCE_XLSX=/path/to/source.xlsx python3 app.py
 ```
 
 ## Qwen
 
-`DASHSCOPE_API_KEY` 是启动必需配置。没有这个环境变量时，服务会直接退出，不会打开 Web 原型，也不会回退到本地模板生成。
+Qwen 配置可以在登录后的右上角 `API 配置` 中维护。这里可以填写 DashScope API Key、默认模型和 Endpoint，并用 `测试连接` 验证当前配置。Key 保存在当前用户的本地 `work/users/<用户ID>/settings.json`，不会写入代码仓库；接口返回时只显示掩码。
+
+也可以继续用环境变量作为默认配置：
 
 ```bash
 DASHSCOPE_API_KEY=你的_key python3 app.py
 ```
 
-也可以创建不会提交的 `.env.local`：
+或者创建不会提交的 `.env.local`：
 
 ```text
 DASHSCOPE_API_KEY=你的_key
 ```
 
-默认模型是 `qwen3.7-max`，界面第 1 步可以从下拉框选择 `qwen3.7-max`、`qwen3-max`、`qwen-plus`、`qwen-turbo`，也可以填写自定义模型名。默认 endpoint 是 DashScope 文本生成接口。
+用户级 API 配置优先级高于环境变量；未配置 Key 时服务仍可启动，但自动脑洞和生成会提示先完成 API 配置。默认模型是 `qwen3.7-max`，界面第 1 步或 `API 配置` 中可以选择 `qwen3.7-max`、`qwen3-max`、`qwen-plus`、`qwen-turbo`，也可以填写自定义模型名。默认 endpoint 是 DashScope 文本生成接口。
 
 ## 多用户与隐私隔离
 

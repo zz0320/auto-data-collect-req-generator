@@ -174,7 +174,7 @@ a {
 }
 
 .status-strip span,
-.user-strip span {
+.user-strip > span {
   display: inline-flex;
   align-items: center;
   min-height: 34px;
@@ -190,6 +190,43 @@ a {
   flex-wrap: wrap;
   justify-content: flex-end;
   gap: 8px;
+}
+
+.avatar-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 42px;
+  min-width: 0;
+  padding: 4px 9px 4px 5px;
+  border: 2px solid var(--line);
+  background: var(--paper);
+  box-shadow: var(--shadow-small);
+  cursor: pointer;
+}
+
+.avatar-chip:hover {
+  transform: translate(2px, 2px);
+  box-shadow: 2px 2px 0 var(--ink);
+}
+
+.avatar-sprite {
+  display: inline-block;
+  width: 34px;
+  height: 34px;
+  flex: 0 0 auto;
+  border: 2px solid var(--line);
+  background-image: url("/assets/avatar-sheet.png");
+  background-size: 400% 300%;
+  background-repeat: no-repeat;
+  image-rendering: pixelated;
+}
+
+#userBadge {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  font-size: 13px;
+  font-weight: 900;
 }
 
 .status-dot::before {
@@ -482,7 +519,31 @@ h3 {
 }
 
 .readiness-grid {
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.connection-card {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(360px, 0.95fr);
+  align-items: center;
+}
+
+.connection-tools {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 10px;
+  align-items: stretch;
+  min-width: 0;
+}
+
+.connection-tools > .secondary-btn {
+  justify-self: start;
+  min-width: 118px;
+  white-space: nowrap;
+}
+
+.wide-field {
+  grid-column: 1 / -1;
 }
 
 .readiness-item,
@@ -676,6 +737,20 @@ a:focus-visible {
   box-shadow: var(--shadow-small);
 }
 
+.workbook-dropzone {
+  position: relative;
+  outline: 2px dashed transparent;
+  outline-offset: -8px;
+  transition: background 120ms ease, outline-color 120ms ease, transform 120ms ease;
+}
+
+.workbook-dropzone.drag-over {
+  background: var(--mint);
+  outline-color: var(--blue);
+  transform: translate(2px, 2px);
+  box-shadow: 2px 2px 0 var(--ink);
+}
+
 .workbook-picker > div {
   display: grid;
   gap: 4px;
@@ -690,6 +765,10 @@ a:focus-visible {
 .workbook-picker small {
   color: var(--muted);
   overflow-wrap: anywhere;
+}
+
+.dropzone-hint {
+  font-weight: 700;
 }
 
 .file-picker-btn input {
@@ -777,28 +856,73 @@ a:focus-visible {
   margin: 10px 0;
 }
 
-.check-row {
-  display: flex;
+.capability-segment {
+  display: grid;
+  grid-template-columns: minmax(90px, 0.8fr) minmax(170px, 1.2fr);
   align-items: center;
   gap: 10px;
-  min-height: 40px;
-}
-
-.check-row input {
-  appearance: none;
-  width: 22px;
-  height: 22px;
-  margin: 0;
+  min-width: 0;
+  min-height: 48px;
+  padding: 8px;
   border: 2px solid var(--line);
   background: var(--paper);
-  box-shadow: 3px 3px 0 var(--ink);
+  box-shadow: var(--shadow-small);
+  cursor: pointer;
 }
 
-.check-row input:checked {
-  background:
-    linear-gradient(45deg, transparent 42%, var(--ink) 42%, var(--ink) 58%, transparent 58%),
-    linear-gradient(-45deg, transparent 42%, var(--ink) 42%, var(--ink) 58%, transparent 58%),
-    var(--green);
+.capability-segment input {
+  position: absolute;
+  inline-size: 1px;
+  block-size: 1px;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.capability-name {
+  font-weight: 900;
+  overflow-wrap: anywhere;
+}
+
+.capability-options {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  min-width: 0;
+  border: 2px solid var(--line);
+  background: #f4f0df;
+}
+
+.capability-option {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 32px;
+  padding: 5px 8px;
+  font-size: 13px;
+  font-weight: 900;
+  color: var(--muted);
+}
+
+.capability-option + .capability-option {
+  border-left: 2px solid var(--line);
+}
+
+.capability-segment.is-off [data-capability-off] {
+  background: var(--yellow);
+  color: var(--ink);
+}
+
+.capability-segment.is-on [data-capability-on] {
+  background: var(--green);
+  color: var(--paper);
+}
+
+.capability-segment.is-off [data-capability-off]::before,
+.capability-segment.is-on [data-capability-on]::before {
+  content: "当前：";
+}
+
+.capability-segment:focus-within {
+  box-shadow: var(--focus);
 }
 
 .icon-btn,
@@ -954,6 +1078,96 @@ a:focus-visible {
   display: grid;
   gap: 14px;
   padding: 14px;
+}
+
+.api-dialog {
+  width: min(780px, 100%);
+}
+
+.avatar-dialog {
+  width: min(760px, 100%);
+}
+
+.api-content,
+.api-form,
+.avatar-content {
+  display: grid;
+  gap: 14px;
+}
+
+.avatar-sheet-preload {
+  position: absolute;
+  inline-size: 1px;
+  block-size: 1px;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.avatar-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.avatar-option {
+  display: grid;
+  justify-items: center;
+  gap: 8px;
+  min-width: 0;
+  padding: 10px;
+  border: 2px solid var(--line);
+  background: var(--paper);
+  box-shadow: var(--shadow-small);
+  cursor: pointer;
+  font-weight: 900;
+}
+
+.avatar-option:hover,
+.avatar-option.selected {
+  background: var(--mint);
+}
+
+.avatar-option.selected {
+  transform: translate(2px, 2px);
+  box-shadow: 2px 2px 0 var(--ink);
+}
+
+.avatar-preview {
+  width: 72px;
+  height: 72px;
+}
+
+.api-status-board {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px;
+  border: 2px solid var(--line);
+  background: var(--mint);
+  box-shadow: var(--shadow-small);
+}
+
+.api-status-board strong,
+.api-status-board small {
+  display: block;
+}
+
+.api-status-board small {
+  margin-top: 4px;
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+
+.input-with-action {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+}
+
+.api-actions {
+  justify-content: flex-start;
+  border: 2px solid var(--line);
 }
 
 .admin-form {
@@ -1174,7 +1388,11 @@ textarea.editable-control {
   .preset-list,
   .generation-summary,
   .editable-grid,
-  .results-grid {
+  .results-grid,
+  .input-with-action,
+  .connection-card,
+  .connection-tools,
+  .avatar-grid {
     grid-template-columns: 1fr;
   }
 

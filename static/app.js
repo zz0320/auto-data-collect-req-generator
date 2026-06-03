@@ -6,8 +6,31 @@ const loginPassword = document.querySelector("#loginPassword");
 const loginBtn = document.querySelector("#loginBtn");
 const authNotice = document.querySelector("#authNotice");
 const userBadge = document.querySelector("#userBadge");
+const avatarPickerBtn = document.querySelector("#avatarPickerBtn");
+const userAvatar = document.querySelector("#userAvatar");
+const avatarPanel = document.querySelector("#avatarPanel");
+const closeAvatarBtn = document.querySelector("#closeAvatarBtn");
+const avatarGrid = document.querySelector("#avatarGrid");
+const avatarNotice = document.querySelector("#avatarNotice");
+const apiConfigBtn = document.querySelector("#apiConfigBtn");
+const openApiConfigInline = document.querySelector("#openApiConfigInline");
 const adminUsersBtn = document.querySelector("#adminUsersBtn");
 const logoutBtn = document.querySelector("#logoutBtn");
+const apiPanel = document.querySelector("#apiPanel");
+const closeApiBtn = document.querySelector("#closeApiBtn");
+const apiConfigForm = document.querySelector("#apiConfigForm");
+const apiConfigBadge = document.querySelector("#apiConfigBadge");
+const apiConfigMeta = document.querySelector("#apiConfigMeta");
+const apiConfigSource = document.querySelector("#apiConfigSource");
+const apiKeyInput = document.querySelector("#apiKeyInput");
+const toggleApiKeyBtn = document.querySelector("#toggleApiKeyBtn");
+const apiKeyHelp = document.querySelector("#apiKeyHelp");
+const apiModel = document.querySelector("#apiModel");
+const apiModelCustom = document.querySelector("#apiModelCustom");
+const apiEndpoint = document.querySelector("#apiEndpoint");
+const testApiConfigBtn = document.querySelector("#testApiConfigBtn");
+const clearApiKeyBtn = document.querySelector("#clearApiKeyBtn");
+const apiNotice = document.querySelector("#apiNotice");
 const adminPanel = document.querySelector("#adminPanel");
 const closeAdminBtn = document.querySelector("#closeAdminBtn");
 const createUserForm = document.querySelector("#createUserForm");
@@ -29,6 +52,7 @@ const sheetDot = document.querySelector("#sheetDot");
 const qwenReadiness = document.querySelector("#qwenReadiness");
 const sheetReadiness = document.querySelector("#sheetReadiness");
 const workbookFile = document.querySelector("#workbookFile");
+const workbookDropzone = document.querySelector("#workbookDropzone");
 const workbookSourceText = document.querySelector("#workbookSourceText");
 const wizardTitle = document.querySelector("#wizardTitle");
 const wizardHint = document.querySelector("#wizardHint");
@@ -87,12 +111,29 @@ let schemaState = null;
 let generatedRows = [];
 let lastGenerationSummary = null;
 let currentUser = null;
+let apiConfigState = null;
 let taskPhases = {
   pretrain: { label: "预训练", maxTargetTimes: 60 },
   posttrain: { label: "后训练", maxTargetTimes: 600 },
 };
 const maxGenerationTaskCount = 200;
 let ideaBusy = false;
+
+const avatarOptions = [
+  { id: "young_man", label: "男生", row: 0, col: 0 },
+  { id: "young_woman", label: "女生", row: 0, col: 1 },
+  { id: "engineer_boy", label: "工程师男生", row: 0, col: 2 },
+  { id: "engineer_girl", label: "工程师女生", row: 0, col: 3 },
+  { id: "cat", label: "猫咪", row: 1, col: 0 },
+  { id: "dog", label: "狗狗", row: 1, col: 1 },
+  { id: "rabbit", label: "兔子", row: 1, col: 2 },
+  { id: "panda", label: "熊猫", row: 1, col: 3 },
+  { id: "robot", label: "机器人", row: 2, col: 0 },
+  { id: "fox", label: "狐狸", row: 2, col: 1 },
+  { id: "bear", label: "小熊", row: 2, col: 2 },
+  { id: "blob", label: "圆形角色", row: 2, col: 3 },
+];
+let currentAvatar = "robot";
 
 const editableFields = [
   { key: "任务名称", label: "任务名称", type: "input" },
@@ -123,6 +164,46 @@ function setNotice(node, message) {
   node.classList.toggle("hidden", !message);
 }
 
+function avatarOptionById(id) {
+  return avatarOptions.find((item) => item.id === id) || avatarOptions.find((item) => item.id === "robot") || avatarOptions[0];
+}
+
+function avatarBackgroundPosition(option) {
+  const col = Number(option?.col || 0);
+  const row = Number(option?.row || 0);
+  return `${col * 33.3333}% ${row * 50}%`;
+}
+
+function paintAvatar(node, avatarId) {
+  if (!node) return;
+  const option = avatarOptionById(avatarId);
+  node.dataset.avatar = option.id;
+  node.style.backgroundPosition = avatarBackgroundPosition(option);
+  node.setAttribute("title", option.label);
+}
+
+function renderAvatarGrid() {
+  if (!avatarGrid) return;
+  avatarGrid.innerHTML = avatarOptions
+    .map((option) => {
+      const selected = option.id === currentAvatar;
+      return `
+        <button class="avatar-option ${selected ? "selected" : ""}" type="button" data-avatar-id="${escapeHtml(option.id)}">
+          <span class="avatar-sprite avatar-preview" style="background-position: ${avatarBackgroundPosition(option)}" aria-hidden="true"></span>
+          <span>${escapeHtml(option.label)}</span>
+        </button>
+      `;
+    })
+    .join("");
+}
+
+function applyAvatar(avatarId) {
+  const option = avatarOptionById(avatarId);
+  currentAvatar = option.id;
+  paintAvatar(userAvatar, currentAvatar);
+  renderAvatarGrid();
+}
+
 function setAuthenticated(user) {
   currentUser = user || null;
   authGate?.classList.toggle("hidden", Boolean(currentUser));
@@ -130,9 +211,13 @@ function setAuthenticated(user) {
   if (userBadge) {
     userBadge.textContent = currentUser ? `${currentUser.username} · ${currentUser.role === "admin" ? "管理员" : "普通用户"}` : "未登录";
   }
+  applyAvatar(currentUser?.avatar || "robot");
   adminUsersBtn?.classList.toggle("hidden", currentUser?.role !== "admin");
   if (!currentUser) {
     adminPanel?.classList.add("hidden");
+    apiPanel?.classList.add("hidden");
+    apiConfigState = null;
+    if (apiKeyInput) apiKeyInput.value = "";
     generatedRows = [];
     lastGenerationSummary = null;
     resultsEl.innerHTML = "";
@@ -197,6 +282,75 @@ function setQwenModel(model) {
     controls.qwenModelCustom.value = value;
   }
   syncQwenModelCustom();
+}
+
+function currentApiModel() {
+  if (apiModel?.value === "custom") {
+    return apiModelCustom?.value.trim() || "";
+  }
+  return apiModel?.value.trim() || currentQwenModel();
+}
+
+function syncApiModelCustom() {
+  const isCustom = apiModel?.value === "custom";
+  apiModelCustom?.classList.toggle("hidden-field", !isCustom);
+  if (!isCustom && apiModelCustom) {
+    apiModelCustom.value = "";
+  }
+}
+
+function setApiModel(model) {
+  const value = String(model || "").trim();
+  if (!apiModel || !value) return;
+  const option = [...apiModel.options].find((item) => item.value === value);
+  if (option) {
+    apiModel.value = value;
+    if (apiModelCustom) apiModelCustom.value = "";
+  } else {
+    apiModel.value = "custom";
+    if (apiModelCustom) apiModelCustom.value = value;
+  }
+  syncApiModelCustom();
+}
+
+function qwenSourceLabel(source) {
+  if (source === "user") return "用户配置";
+  if (source === "env") return "环境变量";
+  if (source === "draft") return "临时输入";
+  return "未配置";
+}
+
+function applyQwenConfig(config = {}) {
+  apiConfigState = config;
+  const configured = Boolean(config.configured);
+  healthState.qwenConfigured = configured;
+  setQwenModel(config.model || currentQwenModel());
+  if (controls.qwenEndpoint && config.endpoint) controls.qwenEndpoint.value = config.endpoint;
+  setApiModel(config.model || currentQwenModel());
+  if (apiEndpoint) apiEndpoint.value = config.endpoint || controls.qwenEndpoint.value || "";
+  if (apiKeyInput) apiKeyInput.value = "";
+  const sourceLabel = qwenSourceLabel(config.source);
+  const mask = config.apiKeyMask ? ` · ${config.apiKeyMask}` : "";
+  if (apiConfigBadge) apiConfigBadge.textContent = configured ? "已配置" : "未配置";
+  if (apiConfigMeta) apiConfigMeta.textContent = configured ? `${sourceLabel}${mask}` : "请填写 DashScope API Key 后保存";
+  if (apiConfigSource) apiConfigSource.textContent = sourceLabel;
+  sourceStatus.textContent = configured ? `Qwen: ${config.model || currentQwenModel()} · ${sourceLabel}` : "Qwen: 未配置";
+  setDot(qwenDot, configured);
+  qwenReadiness.textContent = configured ? `${sourceLabel}${mask}` : "请打开 API 配置填写 Key";
+  if (apiKeyHelp) {
+    apiKeyHelp.textContent = configured
+      ? `当前 ${sourceLabel}${mask}；输入新 Key 并保存即可替换，留空保存会保留原 Key。`
+      : "Key 只保存在当前用户本地设置中，不会写入代码仓库；已保存的 Key 只显示掩码。";
+  }
+  updateIdeaButton();
+  updateReviewSummary();
+  updateNav();
+}
+
+async function loadQwenConfig() {
+  const config = await jsonFetch("/api/qwen/config");
+  applyQwenConfig(config);
+  return config;
 }
 
 function currentTaskPhase() {
@@ -273,6 +427,24 @@ function setIdeaBusy(isBusy) {
   updateIdeaButton();
 }
 
+function updateCapabilityToggleLabels(root = document) {
+  const labels = {
+    mobile: ["不具备移动能力", "具备移动能力"],
+    wholeBody: ["不具备全身能力", "具备全身能力"],
+  };
+  root.querySelectorAll(".capability-segment input[data-key]").forEach((input) => {
+    const label = input.closest(".capability-segment");
+    const textNode = label?.querySelector("[data-capability-state]");
+    const pair = labels[input.dataset.key];
+    if (!label || !textNode || !pair) return;
+    const text = input.checked ? pair[1] : pair[0];
+    textNode.textContent = text;
+    input.setAttribute("aria-label", text);
+    label.classList.toggle("is-on", input.checked);
+    label.classList.toggle("is-off", !input.checked);
+  });
+}
+
 async function jsonFetch(url, options = {}) {
   const headers = options.body instanceof FormData ? options.headers || {} : { "Content-Type": "application/json", ...(options.headers || {}) };
   const response = await fetch(url, { ...options, headers, credentials: "same-origin" });
@@ -297,14 +469,17 @@ function addRobot(data = {}) {
       input.value = data[key];
     }
     input.addEventListener("input", () => {
+      updateCapabilityToggleLabels(node);
       refreshCapabilities();
       updateReviewSummary();
     });
     input.addEventListener("change", () => {
+      updateCapabilityToggleLabels(node);
       refreshCapabilities();
       updateReviewSummary();
     });
   });
+  updateCapabilityToggleLabels(node);
   node.querySelector(".remove-robot").addEventListener("click", () => {
     node.remove();
     renumberRobots();
@@ -396,7 +571,7 @@ function renderRobotPresets() {
 function validateStep(step) {
   if (step === 0) {
     if (!healthState.ok) return "后端未就绪。";
-    if (!healthState.qwenConfigured) return "服务端未配置 DASHSCOPE_API_KEY。";
+    if (!healthState.qwenConfigured) return "请先打开 API 配置，填写 DashScope API Key。";
     if (!healthState.sheetReady) return "存量数据需求表未就绪。";
     if (!currentQwenModel()) return "请填写 Qwen 模型。";
     if (!controls.qwenEndpoint.value.trim()) return "请填写 Qwen endpoint。";
@@ -605,16 +780,19 @@ async function loadSchema() {
   try {
     const health = await jsonFetch("/api/health");
     healthState.ok = Boolean(health.ok);
-    healthState.qwenConfigured = Boolean(health.qwenConfigured);
-    setQwenModel(health.qwenModel || currentQwenModel());
-    controls.qwenEndpoint.value = health.qwenEndpoint || controls.qwenEndpoint.value;
+    applyQwenConfig(
+      health.qwenConfig || {
+        configured: Boolean(health.qwenConfigured),
+        source: health.qwenConfigSource,
+        apiKeyMask: health.qwenApiKeyMask,
+        model: health.qwenModel,
+        endpoint: health.qwenEndpoint,
+      }
+    );
 
     serverStatus.textContent = health.ok ? "后端已连接" : "后端依赖异常";
     serverStatus.classList.toggle("ok", Boolean(health.ok));
     serverStatus.classList.toggle("bad", !health.ok);
-    sourceStatus.textContent = health.qwenConfigured ? `Qwen: ${currentQwenModel()}` : "Qwen: 未配置";
-    setDot(qwenDot, health.qwenConfigured);
-    qwenReadiness.textContent = health.qwenConfigured ? "服务端已配置" : "缺少 DASHSCOPE_API_KEY";
 
     const schema = await jsonFetch("/api/schema");
     schemaState = schema;
@@ -642,12 +820,11 @@ async function loadSchema() {
   }
 }
 
-async function handleWorkbookUpload() {
-  const file = workbookFile?.files?.[0];
+async function uploadWorkbookFile(file) {
   if (!file) return;
   if (!file.name.toLowerCase().endsWith(".xlsx")) {
     renderNotices(["请选择 .xlsx 格式的存量数据表。"]);
-    workbookFile.value = "";
+    if (workbookFile) workbookFile.value = "";
     return;
   }
   if (workbookSourceText) workbookSourceText.textContent = "正在读取并重建 RAG...";
@@ -670,10 +847,27 @@ async function handleWorkbookUpload() {
     renderNotices([`RAG Excel 切换失败：${error.message}`]);
     updateWorkbookLabels();
   } finally {
-    workbookFile.value = "";
+    if (workbookFile) workbookFile.value = "";
+    workbookDropzone?.classList.remove("drag-over");
     updateReviewSummary();
     updateNav();
   }
+}
+
+async function handleWorkbookUpload() {
+  await uploadWorkbookFile(workbookFile?.files?.[0]);
+}
+
+function setWorkbookDragState(event, active) {
+  event.preventDefault();
+  event.stopPropagation();
+  workbookDropzone?.classList.toggle("drag-over", active);
+}
+
+async function handleWorkbookDrop(event) {
+  setWorkbookDragState(event, false);
+  const file = event.dataTransfer?.files?.[0];
+  await uploadWorkbookFile(file);
 }
 
 async function handleGenerate() {
@@ -897,6 +1091,148 @@ async function openAdminPanel() {
   }
 }
 
+async function openApiPanel() {
+  apiPanel?.classList.remove("hidden");
+  setNotice(apiNotice, "");
+  try {
+    await loadQwenConfig();
+  } catch (error) {
+    setNotice(apiNotice, error.message);
+  }
+}
+
+async function openAvatarPanel() {
+  if (!currentUser) return;
+  avatarPanel?.classList.remove("hidden");
+  setNotice(avatarNotice, "");
+  try {
+    const payload = await jsonFetch("/api/profile");
+    if (Array.isArray(payload.avatarOptions) && payload.avatarOptions.length) {
+      avatarOptions.splice(0, avatarOptions.length, ...payload.avatarOptions);
+    }
+    applyAvatar(payload.avatar || currentAvatar);
+  } catch (error) {
+    renderAvatarGrid();
+    setNotice(avatarNotice, error.message);
+  }
+}
+
+async function handleAvatarChoice(event) {
+  const button = event.target.closest("[data-avatar-id]");
+  if (!button) return;
+  const avatar = button.dataset.avatarId;
+  button.disabled = true;
+  setNotice(avatarNotice, "");
+  try {
+    const payload = await jsonFetch("/api/profile", {
+      method: "POST",
+      body: JSON.stringify({ avatar }),
+    });
+    currentUser = { ...(currentUser || {}), avatar: payload.avatar };
+    applyAvatar(payload.avatar);
+    setNotice(avatarNotice, "头像已更新。");
+  } catch (error) {
+    setNotice(avatarNotice, `头像更新失败：${error.message}`);
+  } finally {
+    button.disabled = false;
+  }
+}
+
+async function handleSaveApiConfig(event) {
+  event.preventDefault();
+  const model = currentApiModel();
+  const endpoint = apiEndpoint?.value.trim() || "";
+  if (!model) {
+    setNotice(apiNotice, "请填写 Qwen 模型。");
+    return;
+  }
+  if (!endpoint) {
+    setNotice(apiNotice, "请填写 Qwen Endpoint。");
+    return;
+  }
+  const button = event.submitter || document.querySelector("#saveApiConfigBtn");
+  if (button) button.disabled = true;
+  setNotice(apiNotice, "");
+  try {
+    const payload = await jsonFetch("/api/qwen/config", {
+      method: "POST",
+      body: JSON.stringify({
+        apiKey: apiKeyInput?.value.trim() || "",
+        model,
+        endpoint,
+      }),
+    });
+    applyQwenConfig(payload);
+    setNotice(apiNotice, "API 配置已保存。");
+  } catch (error) {
+    setNotice(apiNotice, `保存失败：${error.message}`);
+  } finally {
+    if (button) button.disabled = false;
+  }
+}
+
+async function handleTestApiConfig() {
+  const model = currentApiModel();
+  const endpoint = apiEndpoint?.value.trim() || "";
+  if (!model || !endpoint) {
+    setNotice(apiNotice, "请先填写模型和 Endpoint。");
+    return;
+  }
+  testApiConfigBtn.disabled = true;
+  testApiConfigBtn.textContent = "测试中...";
+  setNotice(apiNotice, "");
+  try {
+    const draftKey = apiKeyInput?.value.trim() || "";
+    const payload = await jsonFetch("/api/qwen/test", {
+      method: "POST",
+      body: JSON.stringify({
+        apiKey: draftKey,
+        model,
+        endpoint,
+      }),
+    });
+    if (draftKey) {
+      setNotice(apiNotice, `临时 Key 连接测试通过：${payload.model}。点击“保存配置”后才会用于生成。`);
+    } else {
+      await loadQwenConfig();
+      setNotice(apiNotice, `连接测试通过：${payload.model}`);
+    }
+  } catch (error) {
+    setNotice(apiNotice, `连接测试失败：${error.message}`);
+  } finally {
+    testApiConfigBtn.disabled = false;
+    testApiConfigBtn.textContent = "测试连接";
+  }
+}
+
+async function handleClearApiKey() {
+  clearApiKeyBtn.disabled = true;
+  setNotice(apiNotice, "");
+  try {
+    const payload = await jsonFetch("/api/qwen/config", {
+      method: "POST",
+      body: JSON.stringify({
+        clearApiKey: true,
+        model: currentApiModel(),
+        endpoint: apiEndpoint?.value.trim() || "",
+      }),
+    });
+    applyQwenConfig(payload);
+    setNotice(apiNotice, payload.configured ? "已清除用户保存的 Key，当前使用环境变量配置。" : "已清除用户保存的 Key。");
+  } catch (error) {
+    setNotice(apiNotice, `清除失败：${error.message}`);
+  } finally {
+    clearApiKeyBtn.disabled = false;
+  }
+}
+
+function toggleApiKeyVisibility() {
+  if (!apiKeyInput || !toggleApiKeyBtn) return;
+  const show = apiKeyInput.type === "password";
+  apiKeyInput.type = show ? "text" : "password";
+  toggleApiKeyBtn.textContent = show ? "隐藏" : "显示";
+}
+
 async function handleCreateUser(event) {
   event.preventDefault();
   const username = newUsername.value.trim();
@@ -981,8 +1317,22 @@ generateBtn.addEventListener("click", handleGenerate);
 exportBtn?.addEventListener("click", handleExport);
 brainstormIdeasBtn.addEventListener("click", handleBrainstormIdeas);
 workbookFile?.addEventListener("change", handleWorkbookUpload);
+workbookDropzone?.addEventListener("dragenter", (event) => setWorkbookDragState(event, true));
+workbookDropzone?.addEventListener("dragover", (event) => setWorkbookDragState(event, true));
+workbookDropzone?.addEventListener("dragleave", (event) => setWorkbookDragState(event, false));
+workbookDropzone?.addEventListener("drop", handleWorkbookDrop);
 loginForm?.addEventListener("submit", handleLogin);
 logoutBtn?.addEventListener("click", handleLogout);
+avatarPickerBtn?.addEventListener("click", openAvatarPanel);
+closeAvatarBtn?.addEventListener("click", () => avatarPanel?.classList.add("hidden"));
+avatarGrid?.addEventListener("click", handleAvatarChoice);
+apiConfigBtn?.addEventListener("click", openApiPanel);
+openApiConfigInline?.addEventListener("click", openApiPanel);
+closeApiBtn?.addEventListener("click", () => apiPanel?.classList.add("hidden"));
+apiConfigForm?.addEventListener("submit", handleSaveApiConfig);
+testApiConfigBtn?.addEventListener("click", handleTestApiConfig);
+clearApiKeyBtn?.addEventListener("click", handleClearApiKey);
+toggleApiKeyBtn?.addEventListener("click", toggleApiKeyVisibility);
 adminUsersBtn?.addEventListener("click", openAdminPanel);
 closeAdminBtn?.addEventListener("click", () => adminPanel?.classList.add("hidden"));
 createUserForm?.addEventListener("submit", handleCreateUser);
@@ -1027,8 +1377,13 @@ controls.qwenModelCustom.addEventListener("input", () => {
   updateNav();
 });
 controls.qwenEndpoint.addEventListener("input", updateReviewSummary);
+apiModel?.addEventListener("change", syncApiModelCustom);
+apiModelCustom?.addEventListener("input", () => setNotice(apiNotice, ""));
+apiEndpoint?.addEventListener("input", () => setNotice(apiNotice, ""));
 syncPhaseControls({ clamp: false });
 syncQwenModelCustom();
+syncApiModelCustom();
+applyAvatar("robot");
 syncGenerationCountWithIdeas();
 initialRobots.forEach(addRobot);
 showStep(0);

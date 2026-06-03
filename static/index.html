@@ -52,7 +52,11 @@
             <span id="sourceStatus">Qwen: 检查中</span>
           </div>
           <div class="user-strip">
-            <span id="userBadge">未登录</span>
+            <button id="avatarPickerBtn" class="avatar-chip" type="button" title="更换头像">
+              <span id="userAvatar" class="avatar-sprite" aria-hidden="true"></span>
+              <span id="userBadge">未登录</span>
+            </button>
+            <button id="apiConfigBtn" class="mini-btn" type="button">API 配置</button>
             <button id="adminUsersBtn" class="mini-btn hidden" type="button">用户管理</button>
             <button id="logoutBtn" class="mini-btn" type="button">退出</button>
           </div>
@@ -122,29 +126,33 @@
 
           <form id="wizardForm">
             <section class="wizard-step active" data-step="0" aria-labelledby="stepConnectTitle">
-              <div class="step-card">
+              <div class="step-card connection-card">
                 <div>
                   <h3 id="stepConnectTitle">系统连接</h3>
-                  <p>这一步只做运行前检查。没有服务端 `DASHSCOPE_API_KEY` 时，后端会直接拒绝启动。</p>
+                  <p>这一步只做运行前检查。DashScope API Key、模型和 Endpoint 可在单独的 API 配置界面维护。</p>
                 </div>
-                <div class="readiness-grid">
-                  <div class="readiness-item">
-                    <span class="readiness-dot" id="qwenDot"></span>
-                    <strong>Qwen API</strong>
-                    <small id="qwenReadiness">检查中</small>
-                  </div>
-                  <div class="readiness-item">
-                    <span class="readiness-dot" id="sheetDot"></span>
-                    <strong>存量表</strong>
-                    <small id="sheetReadiness">检查中</small>
+                <div class="connection-tools">
+                  <button id="openApiConfigInline" class="secondary-btn" type="button">API 配置</button>
+                  <div class="readiness-grid">
+                    <div class="readiness-item">
+                      <span class="readiness-dot" id="qwenDot"></span>
+                      <strong>Qwen API</strong>
+                      <small id="qwenReadiness">检查中</small>
+                    </div>
+                    <div class="readiness-item">
+                      <span class="readiness-dot" id="sheetDot"></span>
+                      <strong>存量表</strong>
+                      <small id="sheetReadiness">检查中</small>
+                    </div>
                   </div>
                 </div>
               </div>
 
-              <div class="workbook-picker">
+              <div id="workbookDropzone" class="workbook-picker workbook-dropzone" aria-label="RAG Excel 拖拽上传区域">
                 <div>
                   <strong>RAG 数据源</strong>
                   <small id="workbookSourceText">默认读取本地存量表</small>
+                  <small class="dropzone-hint">拖拽 .xlsx 到这里，或点击右侧按钮选择文件</small>
                 </div>
                 <label class="secondary-btn file-picker-btn">
                   <input id="workbookFile" type="file" accept=".xlsx" />
@@ -165,7 +173,7 @@
                   <input id="qwenModelCustom" class="hidden-field" placeholder="例如 qwen3.7-max-2026-05-20" autocomplete="off" />
                   <small id="qwenModelHelp" class="field-help">默认使用官方模型页当前靠前的 Qwen3.7-Max。</small>
                 </label>
-                <label class="field">
+                <label class="field wide-field">
                   <span>Qwen Endpoint</span>
                   <input
                     id="qwenEndpoint"
@@ -295,6 +303,90 @@
       </main>
     </div>
 
+    <section id="avatarPanel" class="admin-panel hidden" aria-label="头像选择">
+      <div class="admin-dialog avatar-dialog">
+        <div class="panel-head">
+          <div>
+            <h2>选择头像</h2>
+            <p>统一像素风头像，可随时切换当前账号显示。</p>
+          </div>
+          <button id="closeAvatarBtn" class="icon-btn" type="button" title="关闭">
+            <span aria-hidden="true">×</span>
+            <span class="sr-only">关闭</span>
+          </button>
+        </div>
+        <div class="admin-content avatar-content">
+          <img class="avatar-sheet-preload" src="/assets/avatar-sheet.png" alt="" aria-hidden="true" />
+          <div id="avatarGrid" class="avatar-grid" aria-live="polite"></div>
+          <div id="avatarNotice" class="notice hidden" aria-live="polite"></div>
+        </div>
+      </div>
+    </section>
+
+    <section id="apiPanel" class="admin-panel hidden" aria-label="API 配置">
+      <div class="admin-dialog api-dialog">
+        <div class="panel-head">
+          <div>
+            <h2>API 配置</h2>
+            <p>配置 DashScope API Key、默认模型和 Endpoint，生成与自动脑洞都会使用这里的设置。</p>
+          </div>
+          <button id="closeApiBtn" class="icon-btn" type="button" title="关闭">
+            <span aria-hidden="true">×</span>
+            <span class="sr-only">关闭</span>
+          </button>
+        </div>
+        <div class="admin-content api-content">
+          <div class="api-status-board" aria-live="polite">
+            <div>
+              <strong id="apiConfigBadge">检查中</strong>
+              <small id="apiConfigMeta">正在读取当前用户 API 配置</small>
+            </div>
+            <span id="apiConfigSource" class="pill">未配置</span>
+          </div>
+
+          <form id="apiConfigForm" class="api-form">
+            <label class="field api-key-field">
+              <span>DashScope API Key</span>
+              <div class="input-with-action">
+                <input id="apiKeyInput" type="password" placeholder="粘贴 sk-...；留空则保留已保存 Key" autocomplete="off" />
+                <button id="toggleApiKeyBtn" class="mini-btn" type="button">显示</button>
+              </div>
+              <small id="apiKeyHelp" class="field-help">Key 只保存在当前用户本地设置中，不会写入代码仓库；已保存的 Key 只显示掩码。</small>
+            </label>
+
+            <div class="control-grid">
+              <label class="field">
+                <span>默认 Qwen 模型</span>
+                <select id="apiModel">
+                  <option value="qwen3.7-max">qwen3.7-max（最新旗舰，推荐）</option>
+                  <option value="qwen3-max">qwen3-max（强模型，已验证）</option>
+                  <option value="qwen-plus">qwen-plus（均衡，已验证）</option>
+                  <option value="qwen-turbo">qwen-turbo（快速低成本，已验证）</option>
+                  <option value="custom">自定义模型名</option>
+                </select>
+                <input id="apiModelCustom" class="hidden-field" placeholder="自定义模型名" autocomplete="off" />
+              </label>
+              <label class="field">
+                <span>Qwen Endpoint</span>
+                <input
+                  id="apiEndpoint"
+                  value="https://dashscope.aliyuncs.com/api/v1/services/aigc/text-generation/generation"
+                  autocomplete="off"
+                />
+              </label>
+            </div>
+
+            <div class="action-row api-actions">
+              <button id="saveApiConfigBtn" class="primary-btn" type="submit">保存配置</button>
+              <button id="testApiConfigBtn" class="secondary-btn" type="button">测试连接</button>
+              <button id="clearApiKeyBtn" class="secondary-btn" type="button">清除保存的 Key</button>
+            </div>
+          </form>
+          <div id="apiNotice" class="notice hidden" aria-live="polite"></div>
+        </div>
+      </div>
+    </section>
+
     <section id="adminPanel" class="admin-panel hidden" aria-label="用户管理">
       <div class="admin-dialog">
         <div class="panel-head">
@@ -370,13 +462,23 @@
           </label>
         </div>
         <div class="toggle-grid">
-          <label class="check-row">
+          <label class="capability-segment">
             <input data-key="mobile" type="checkbox" />
-            <span>移动能力</span>
+            <span class="capability-name">移动能力</span>
+            <span class="capability-options" aria-hidden="true">
+              <span class="capability-option" data-capability-off>不具备</span>
+              <span class="capability-option" data-capability-on>具备</span>
+            </span>
+            <span class="sr-only" data-capability-state="mobile">当前：不具备移动能力</span>
           </label>
-          <label class="check-row">
+          <label class="capability-segment">
             <input data-key="wholeBody" type="checkbox" />
-            <span>全身能力</span>
+            <span class="capability-name">全身能力</span>
+            <span class="capability-options" aria-hidden="true">
+              <span class="capability-option" data-capability-off>不具备</span>
+              <span class="capability-option" data-capability-on>具备</span>
+            </span>
+            <span class="sr-only" data-capability-state="wholeBody">当前：不具备全身能力</span>
           </label>
         </div>
         <label class="field">

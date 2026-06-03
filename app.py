@@ -74,6 +74,40 @@ DEFAULT_SOURCE_XLSX = Path(
         "/Users/kenton/Downloads/模型训练记录表_数据需求总表同步_收集结果-有效.xlsx",
     )
 )
+
+
+AVATAR_PRESETS = [
+    {"id": "young_man", "label": "男生", "row": 0, "col": 0},
+    {"id": "young_woman", "label": "女生", "row": 0, "col": 1},
+    {"id": "engineer_boy", "label": "工程师男生", "row": 0, "col": 2},
+    {"id": "engineer_girl", "label": "工程师女生", "row": 0, "col": 3},
+    {"id": "cat", "label": "猫咪", "row": 1, "col": 0},
+    {"id": "dog", "label": "狗狗", "row": 1, "col": 1},
+    {"id": "rabbit", "label": "兔子", "row": 1, "col": 2},
+    {"id": "panda", "label": "熊猫", "row": 1, "col": 3},
+    {"id": "robot", "label": "机器人", "row": 2, "col": 0},
+    {"id": "fox", "label": "狐狸", "row": 2, "col": 1},
+    {"id": "bear", "label": "小熊", "row": 2, "col": 2},
+    {"id": "blob", "label": "圆形角色", "row": 2, "col": 3},
+]
+AVATAR_IDS = {item["id"] for item in AVATAR_PRESETS}
+DEFAULT_AVATAR_ID = "robot"
+
+
+def normalize_avatar_id(value: Any) -> str:
+    text = str(value or "").strip()
+    return text if text in AVATAR_IDS else DEFAULT_AVATAR_ID
+
+
+def mask_api_key(value: Any) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    if len(text) <= 10:
+        return f"{text[:2]}***{text[-2:]}"
+    return f"{text[:3]}***{text[-4:]}"
+
+
 CURRENT_SOURCE_XLSX = DEFAULT_SOURCE_XLSX
 
 
@@ -275,13 +309,26 @@ class UserWorkspaceManager:
     def settings_path(self, user: dict[str, Any] | None) -> Path:
         return self.user_root(user) / "settings.json"
 
-    def _load_source_for_user(self, user: dict[str, Any] | None) -> Path:
+    def _read_settings(self, user: dict[str, Any] | None) -> dict[str, Any]:
         settings = self.settings_path(user)
         if settings.exists():
             try:
                 data = json.loads(settings.read_text(encoding="utf-8"))
             except json.JSONDecodeError:
                 data = {}
+            return data if isinstance(data, dict) else {}
+        return {}
+
+    def _write_settings(self, user: dict[str, Any] | None, data: dict[str, Any]) -> None:
+        root = self.user_root(user)
+        root.mkdir(parents=True, exist_ok=True)
+        settings = dict(data)
+        settings["updatedAt"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        self.settings_path(user).write_text(json.dumps(settings, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    def _load_source_for_user(self, user: dict[str, Any] | None) -> Path:
+        data = self._read_settings(user)
+        if data:
             source = data.get("activeSource")
             if source:
                 return Path(source)
@@ -307,14 +354,84 @@ class UserWorkspaceManager:
         state = self._state_from_source(source)
         user_id = self.user_id(user)
         with self._lock:
-            root = self.user_root(user)
-            root.mkdir(parents=True, exist_ok=True)
-            self.settings_path(user).write_text(
-                json.dumps({"activeSource": str(source), "updatedAt": datetime.now().strftime("%Y-%m-%d %H:%M:%S")}, ensure_ascii=False, indent=2),
-                encoding="utf-8",
-            )
+            settings = self._read_settings(user)
+            settings["activeSource"] = str(source)
+            self._write_settings(user, settings)
             self._states[user_id] = state
         return state.summary
+
+    def qwen_config(self, user: dict[str, Any] | None, include_secret: bool = False) -> dict[str, Any]:
+        settings = self._read_settings(user)
+        saved = settings.get("qwen") if isinstance(settings.get("qwen"), dict) else {}
+        saved_key = str(saved.get("apiKey") or "").strip()
+        env_key = os.getenv("DASHSCOPE_API_KEY", "").strip()
+        effective_key = saved_key or env_key
+        source = "user" if saved_key else ("env" if env_key else "missing")
+        model = str(saved.get("model") or DEFAULT_QWEN_MODEL).strip() or DEFAULT_QWEN_MODEL
+        endpoint = str(saved.get("endpoint") or DEFAULT_QWEN_ENDPOINT).strip() or DEFAULT_QWEN_ENDPOINT
+        config = {
+            "ok": True,
+            "configured": bool(effective_key),
+            "source": source,
+            "hasSavedApiKey": bool(saved_key),
+            "apiKeyMask": mask_api_key(effective_key),
+            "model": model,
+            "modelOptions": QWEN_MODEL_OPTIONS,
+            "endpoint": endpoint,
+            "updatedAt": str(saved.get("updatedAt") or ""),
+        }
+        if include_secret:
+            config["apiKey"] = effective_key
+        return config
+
+    def save_qwen_config(
+        self,
+        user: dict[str, Any] | None,
+        api_key: str | None = None,
+        model: str | None = None,
+        endpoint: str | None = None,
+        clear_api_key: bool = False,
+    ) -> dict[str, Any]:
+        with self._lock:
+            settings = self._read_settings(user)
+            qwen = settings.get("qwen") if isinstance(settings.get("qwen"), dict) else {}
+            qwen = dict(qwen)
+            if clear_api_key:
+                qwen.pop("apiKey", None)
+            elif api_key is not None and str(api_key).strip():
+                qwen["apiKey"] = str(api_key).strip()
+            clean_model = str(model or "").strip()
+            clean_endpoint = str(endpoint or "").strip()
+            if clean_model:
+                qwen["model"] = clean_model
+            if clean_endpoint:
+                qwen["endpoint"] = clean_endpoint
+            qwen["updatedAt"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            settings["qwen"] = qwen
+            self._write_settings(user, settings)
+        return self.qwen_config(user)
+
+    def user_profile(self, user: dict[str, Any] | None) -> dict[str, Any]:
+        settings = self._read_settings(user)
+        saved = settings.get("profile") if isinstance(settings.get("profile"), dict) else {}
+        return {
+            "ok": True,
+            "avatar": normalize_avatar_id(saved.get("avatar")),
+            "avatarOptions": AVATAR_PRESETS,
+            "updatedAt": str(saved.get("updatedAt") or ""),
+        }
+
+    def save_user_profile(self, user: dict[str, Any] | None, avatar: str | None = None) -> dict[str, Any]:
+        with self._lock:
+            settings = self._read_settings(user)
+            profile = settings.get("profile") if isinstance(settings.get("profile"), dict) else {}
+            profile = dict(profile)
+            if avatar is not None:
+                profile["avatar"] = normalize_avatar_id(avatar)
+            profile["updatedAt"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            settings["profile"] = profile
+            self._write_settings(user, settings)
+        return self.user_profile(user)
 
     def save_upload(self, user: dict[str, Any], filename: str, file_data: bytes) -> Path:
         uploads = self.user_root(user) / "rag_uploads"
@@ -348,6 +465,7 @@ def env_int(name: str, default: int) -> int:
 
 QWEN_GENERATION_TIMEOUT_SECONDS = env_int("QWEN_GENERATION_TIMEOUT_SECONDS", 180)
 QWEN_IDEA_TIMEOUT_SECONDS = env_int("QWEN_IDEA_TIMEOUT_SECONDS", 180)
+QWEN_TEST_TIMEOUT_SECONDS = env_int("QWEN_TEST_TIMEOUT_SECONDS", 30)
 
 QWEN_MODEL_OPTIONS = [
     {
@@ -914,14 +1032,16 @@ def parse_bool(value: Any) -> bool:
     return bool(value)
 
 
-def public_session_user(user: dict[str, Any] | None) -> dict[str, Any] | None:
+def public_session_user(user: dict[str, Any] | None, workspace_manager: UserWorkspaceManager | None = None) -> dict[str, Any] | None:
     if not user:
         return None
+    profile = (workspace_manager or WORKSPACE_MANAGER).user_profile(user) if workspace_manager is not None else {"avatar": DEFAULT_AVATAR_ID}
     return {
         "id": str(user.get("id") or ""),
         "username": str(user.get("username") or ""),
         "role": str(user.get("role") or "user"),
         "isAdmin": str(user.get("role") or "") == "admin",
+        "avatar": normalize_avatar_id(profile.get("avatar")),
     }
 
 
@@ -983,6 +1103,102 @@ def workspace_state_for(
     if current_user is None and workspace_manager is None:
         return None
     return (workspace_manager or WORKSPACE_MANAGER).get_workspace(current_user or LOCAL_USER)
+
+
+def qwen_config_for_user(
+    current_user: dict[str, Any] | None = None,
+    workspace_manager: UserWorkspaceManager | None = None,
+    include_secret: bool = False,
+) -> dict[str, Any]:
+    if current_user is None and workspace_manager is None:
+        env_key = os.getenv("DASHSCOPE_API_KEY", "").strip()
+        config = {
+            "ok": True,
+            "configured": bool(env_key),
+            "source": "env" if env_key else "missing",
+            "hasSavedApiKey": False,
+            "apiKeyMask": mask_api_key(env_key),
+            "model": DEFAULT_QWEN_MODEL,
+            "modelOptions": QWEN_MODEL_OPTIONS,
+            "endpoint": DEFAULT_QWEN_ENDPOINT,
+            "updatedAt": "",
+        }
+        if include_secret:
+            config["apiKey"] = env_key
+        return config
+    return (workspace_manager or WORKSPACE_MANAGER).qwen_config(current_user or LOCAL_USER, include_secret=include_secret)
+
+
+def resolve_qwen_request_config(
+    body: dict[str, Any],
+    current_user: dict[str, Any] | None = None,
+    workspace_manager: UserWorkspaceManager | None = None,
+    allow_body_api_key: bool = False,
+) -> tuple[str, str, str, str]:
+    config = qwen_config_for_user(current_user, workspace_manager, include_secret=True)
+    body_key = str(body.get("qwenApiKey") or body.get("apiKey") or "").strip() if allow_body_api_key else ""
+    api_key = body_key or str(config.get("apiKey") or "").strip()
+    model = str(body.get("qwenModel") or config.get("model") or DEFAULT_QWEN_MODEL).strip() or DEFAULT_QWEN_MODEL
+    endpoint = str(body.get("qwenEndpoint") or config.get("endpoint") or DEFAULT_QWEN_ENDPOINT).strip() or DEFAULT_QWEN_ENDPOINT
+    if not api_key:
+        raise ValueError("请先在 API 配置中填写 DashScope API Key")
+    source = "draft" if body_key else str(config.get("source") or "missing")
+    return api_key, model, endpoint, source
+
+
+def qwen_config_response(
+    current_user: dict[str, Any] | None = None,
+    workspace_manager: UserWorkspaceManager | None = None,
+) -> dict[str, Any]:
+    return qwen_config_for_user(current_user, workspace_manager, include_secret=False)
+
+
+def save_qwen_config_response(
+    body: dict[str, Any],
+    current_user: dict[str, Any] | None = None,
+    workspace_manager: UserWorkspaceManager | None = None,
+) -> dict[str, Any]:
+    manager = workspace_manager or WORKSPACE_MANAGER
+    return manager.save_qwen_config(
+        current_user or LOCAL_USER,
+        api_key=str(body.get("apiKey") or body.get("qwenApiKey") or "").strip() or None,
+        model=str(body.get("model") or body.get("qwenModel") or "").strip() or None,
+        endpoint=str(body.get("endpoint") or body.get("qwenEndpoint") or "").strip() or None,
+        clear_api_key=parse_bool(body.get("clearApiKey")),
+    )
+
+
+def qwen_config_test_response(
+    body: dict[str, Any],
+    current_user: dict[str, Any] | None = None,
+    workspace_manager: UserWorkspaceManager | None = None,
+) -> dict[str, Any]:
+    api_key, model, endpoint, source = resolve_qwen_request_config(
+        {
+            "qwenApiKey": body.get("apiKey") or body.get("qwenApiKey"),
+            "qwenModel": body.get("model") or body.get("qwenModel"),
+            "qwenEndpoint": body.get("endpoint") or body.get("qwenEndpoint"),
+        },
+        current_user=current_user,
+        workspace_manager=workspace_manager,
+        allow_body_api_key=True,
+    )
+    parsed = call_qwen_json(
+        "你是 API 连通性测试器，只输出 JSON。",
+        '请只输出 {"ok": true}，不要添加解释。',
+        api_key,
+        model,
+        endpoint,
+        timeout=QWEN_TEST_TIMEOUT_SECONDS,
+    )
+    return {
+        "ok": True,
+        "configured": True,
+        "source": source,
+        "model": model,
+        "endpoint": endpoint,
+        "result": bool(parsed.get("ok", True)) if isinstance(parsed, dict) else True,
+    }
 
 
 def parse_task_phase(value: Any) -> str:
@@ -1745,13 +1961,9 @@ def brainstorm_ideas_response(
         raise ValueError("本次输出需求条数必须大于 0")
     if generation_count > MAX_GENERATED_TASKS_PER_REQUEST:
         raise ValueError(f"本次最多生成 {MAX_GENERATED_TASKS_PER_REQUEST} 条需求；这和单任务目标次数不是同一个概念")
-    api_key = os.getenv("DASHSCOPE_API_KEY", "").strip()
-    if not api_key:
-        raise ValueError("服务未配置 DASHSCOPE_API_KEY，无法调用 Qwen 自动脑洞")
     idea_count = int(float(body.get("ideaCount") or generation_count or (18 if task_phase == "pretrain" else 36)))
     idea_count = max(1, min(idea_count, MAX_GENERATED_TASKS_PER_REQUEST))
-    model = str(body.get("qwenModel") or DEFAULT_QWEN_MODEL).strip() or DEFAULT_QWEN_MODEL
-    endpoint = str(body.get("qwenEndpoint") or DEFAULT_QWEN_ENDPOINT).strip() or DEFAULT_QWEN_ENDPOINT
+    api_key, model, endpoint, _ = resolve_qwen_request_config(body, current_user, workspace_manager)
     workspace_state = workspace_state_for(current_user, workspace_manager)
     workbook_summary = workspace_state.summary if workspace_state else WORKBOOK_SUMMARY
     rag_documents = workspace_state.rag_documents if workspace_state else RAG_DOCUMENTS
@@ -1858,11 +2070,7 @@ def generation_response(
         raise ValueError("本次输出需求条数必须大于 0")
     if generation_task_count > MAX_GENERATED_TASKS_PER_REQUEST:
         raise ValueError(f"本次最多生成 {MAX_GENERATED_TASKS_PER_REQUEST} 条需求；这和单任务目标次数不是同一个概念")
-    api_key = os.getenv("DASHSCOPE_API_KEY", "").strip()
-    if not api_key:
-        raise ValueError("服务未配置 DASHSCOPE_API_KEY，无法启动 Qwen 生成链路")
-    model = str(body.get("qwenModel") or DEFAULT_QWEN_MODEL).strip() or DEFAULT_QWEN_MODEL
-    endpoint = str(body.get("qwenEndpoint") or DEFAULT_QWEN_ENDPOINT).strip() or DEFAULT_QWEN_ENDPOINT
+    api_key, model, endpoint, _ = resolve_qwen_request_config(body, current_user, workspace_manager)
     source = "qwen"
     notices: list[str] = []
     workspace_state = workspace_state_for(current_user, workspace_manager)
@@ -2038,7 +2246,7 @@ class Handler(BaseHTTPRequestHandler):
                     {
                         "ok": True,
                         "authenticated": bool(user),
-                        "user": public_session_user(user),
+                        "user": public_session_user(user, WORKSPACE_MANAGER),
                         "defaultAdminUsername": DEFAULT_ADMIN_USERNAME,
                     }
                 )
@@ -2066,20 +2274,30 @@ class Handler(BaseHTTPRequestHandler):
                     return
                 if path == "/api/health":
                     state = WORKSPACE_MANAGER.get_workspace(user)
+                    qwen_config = qwen_config_response(user, WORKSPACE_MANAGER)
                     self.send_json(
                         {
                             "ok": OPENPYXL_IMPORT_ERROR is None and bool(state.summary.get("ok")),
                             "time": now_text(),
-                            "user": public_session_user(user),
+                            "user": public_session_user(user, WORKSPACE_MANAGER),
                             "sourceWorkbook": str(state.source),
                             "defaultSourceWorkbook": str(DEFAULT_SOURCE_XLSX),
                             "openpyxlError": str(OPENPYXL_IMPORT_ERROR) if OPENPYXL_IMPORT_ERROR else "",
-                            "qwenConfigured": bool(os.getenv("DASHSCOPE_API_KEY", "").strip()),
-                            "qwenModel": DEFAULT_QWEN_MODEL,
+                            "qwenConfigured": bool(qwen_config.get("configured")),
+                            "qwenConfigSource": qwen_config.get("source"),
+                            "qwenApiKeyMask": qwen_config.get("apiKeyMask"),
+                            "qwenModel": qwen_config.get("model") or DEFAULT_QWEN_MODEL,
                             "qwenModelOptions": QWEN_MODEL_OPTIONS,
-                            "qwenEndpoint": DEFAULT_QWEN_ENDPOINT,
+                            "qwenEndpoint": qwen_config.get("endpoint") or DEFAULT_QWEN_ENDPOINT,
+                            "qwenConfig": qwen_config,
                         }
                     )
+                    return
+                if path == "/api/qwen/config":
+                    self.send_json(qwen_config_response(user, WORKSPACE_MANAGER))
+                    return
+                if path == "/api/profile":
+                    self.send_json(WORKSPACE_MANAGER.user_profile(user))
                     return
                 if path == "/api/schema":
                     self.send_json(WORKSPACE_MANAGER.get_workspace(user).summary)
@@ -2118,7 +2336,7 @@ class Handler(BaseHTTPRequestHandler):
                 user = AUTH_STORE.authenticate(str(body.get("username") or ""), str(body.get("password") or ""))
                 token = create_session(user)
                 self.send_json(
-                    {"ok": True, "authenticated": True, "user": public_session_user(user)},
+                    {"ok": True, "authenticated": True, "user": public_session_user(user, WORKSPACE_MANAGER)},
                     headers={"Set-Cookie": session_cookie_header(token)},
                 )
                 return
@@ -2164,6 +2382,19 @@ class Handler(BaseHTTPRequestHandler):
                 robots = parse_robots(body.get("robots"))
                 self.send_json({"ok": True, "capabilities": [derive_capabilities(robot) for robot in robots]})
                 return
+            if parsed.path == "/api/qwen/config":
+                body = self.read_json_body()
+                self.send_json(save_qwen_config_response(body, current_user=user, workspace_manager=WORKSPACE_MANAGER))
+                return
+            if parsed.path == "/api/qwen/test":
+                body = self.read_json_body()
+                self.send_json(qwen_config_test_response(body, current_user=user, workspace_manager=WORKSPACE_MANAGER))
+                return
+            if parsed.path == "/api/profile":
+                body = self.read_json_body()
+                profile = WORKSPACE_MANAGER.save_user_profile(user, avatar=str(body.get("avatar") or ""))
+                self.send_json({"ok": True, **profile, "user": public_session_user(user, WORKSPACE_MANAGER)})
+                return
             if parsed.path == "/api/generate":
                 body = self.read_json_body()
                 self.send_json(generation_response(body, current_user=user, workspace_manager=WORKSPACE_MANAGER))
@@ -2198,8 +2429,6 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def main() -> None:
-    if not os.getenv("DASHSCOPE_API_KEY", "").strip():
-        raise SystemExit("DASHSCOPE_API_KEY is required. Configure Qwen before starting this prototype.")
     if OPENPYXL_IMPORT_ERROR:
         raise SystemExit(f"openpyxl is required: {OPENPYXL_IMPORT_ERROR}")
     port = int(os.getenv("PORT", "8787"))
@@ -2207,6 +2436,7 @@ def main() -> None:
     print(f"Robot demand prototype running at http://127.0.0.1:{port}/")
     print(f"Source workbook: {DEFAULT_SOURCE_XLSX}")
     print(f"Qwen model: {DEFAULT_QWEN_MODEL}")
+    print(f"Qwen API: {'configured from environment' if os.getenv('DASHSCOPE_API_KEY', '').strip() else 'not configured yet'}")
     print(f"Admin username: {DEFAULT_ADMIN_USERNAME}")
     try:
         server.serve_forever()
