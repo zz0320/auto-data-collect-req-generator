@@ -62,8 +62,8 @@
             <li class="step-tab" data-step-indicator="3">
               <span>4</span>
               <div>
-                <strong>审核并生成</strong>
-                <small>校验、飞书和 Excel</small>
+                <strong>生成和导出</strong>
+                <small>先生成，编辑后导出</small>
               </div>
             </li>
           </ol>
@@ -104,11 +104,6 @@
                     <span class="readiness-dot" id="sheetDot"></span>
                     <strong>存量表</strong>
                     <small id="sheetReadiness">检查中</small>
-                  </div>
-                  <div class="readiness-item">
-                    <span class="readiness-dot" id="feishuDot"></span>
-                    <strong>飞书</strong>
-                    <small>可在第 4 步开启</small>
                   </div>
                 </div>
               </div>
@@ -223,34 +218,23 @@
               </div>
             </section>
 
-            <section class="wizard-step" data-step="3" aria-labelledby="stepReviewTitle">
+            <section class="wizard-step" data-step="3" aria-labelledby="stepGenerateTitle">
               <div class="step-card">
                 <div>
-                  <h3 id="stepReviewTitle">审核并生成</h3>
-                  <p>确认摘要后再调用 Qwen。生成结果会先过能力约束校验，再导出 Excel。</p>
+                  <h3 id="stepGenerateTitle">生成需求</h3>
+                  <p>先调用 Qwen 生成需求，结果会出现在右侧编辑区；修改完成后再导出 Excel。</p>
                 </div>
               </div>
 
-              <div id="reviewSummary" class="review-summary"></div>
-
-              <div class="feishu-box">
-                <label class="check-row">
-                  <input id="sendFeishu" type="checkbox" />
-                  <span>生成完成后推送飞书小助手</span>
-                </label>
-                <label class="field secret-field">
-                  <span>飞书 webhook</span>
-                  <input id="feishuWebhook" type="password" autocomplete="off" placeholder="https://open.feishu.cn/..." />
-                </label>
-                <button id="testFeishuBtn" class="secondary-btn" type="button">测试飞书</button>
-              </div>
+              <div id="generationSummary" class="generation-summary"></div>
 
               <div class="action-row">
                 <button id="generateBtn" class="primary-btn" type="button">
                   <span class="btn-mark" aria-hidden="true"></span>
                   调用 Qwen 生成
                 </button>
-                <a id="downloadLink" class="secondary-btn disabled" href="#" aria-disabled="true">下载 Excel</a>
+                <button id="exportBtn" class="secondary-btn" type="button" disabled>导出 Excel</button>
+                <a id="downloadLink" class="secondary-btn disabled" href="#" aria-disabled="true">下载已导出文件</a>
               </div>
             </section>
 
@@ -265,11 +249,11 @@
           <div class="panel-head">
             <div>
               <h2 id="resultTitle">结果队列</h2>
-              <p id="resultSummary">完成第 4 步后显示结果</p>
+              <p id="resultSummary">生成后在这里编辑需求，再导出 Excel</p>
             </div>
             <div class="meter">
               <span id="acceptedMeter">0</span>
-              <span>通过</span>
+              <span>条</span>
             </div>
           </div>
           <div id="notices" class="notices" aria-live="polite"></div>

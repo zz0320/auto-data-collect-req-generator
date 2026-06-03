@@ -8,7 +8,6 @@ const serverStatus = document.querySelector("#serverStatus");
 const sourceStatus = document.querySelector("#sourceStatus");
 const qwenDot = document.querySelector("#qwenDot");
 const sheetDot = document.querySelector("#sheetDot");
-const feishuDot = document.querySelector("#feishuDot");
 const qwenReadiness = document.querySelector("#qwenReadiness");
 const sheetReadiness = document.querySelector("#sheetReadiness");
 const workbookFile = document.querySelector("#workbookFile");
@@ -19,14 +18,14 @@ const stepMeter = document.querySelector("#stepMeter");
 const prevBtn = document.querySelector("#prevBtn");
 const nextBtn = document.querySelector("#nextBtn");
 const generateBtn = document.querySelector("#generateBtn");
+const exportBtn = document.querySelector("#exportBtn");
 const brainstormIdeasBtn = document.querySelector("#brainstormIdeasBtn");
-const testFeishuBtn = document.querySelector("#testFeishuBtn");
 const downloadLink = document.querySelector("#downloadLink");
 const resultSummary = document.querySelector("#resultSummary");
 const acceptedMeter = document.querySelector("#acceptedMeter");
 const noticesEl = document.querySelector("#notices");
 const resultsEl = document.querySelector("#results");
-const reviewSummary = document.querySelector("#reviewSummary");
+const generationSummary = document.querySelector("#generationSummary");
 const ideaStatus = document.querySelector("#ideaStatus");
 const phaseLimitText = document.querySelector("#phaseLimitText");
 const targetTimesLimit = document.querySelector("#targetTimesLimit");
@@ -40,8 +39,6 @@ const controls = {
   qwenModel: document.querySelector("#qwenModel"),
   qwenModelCustom: document.querySelector("#qwenModelCustom"),
   qwenEndpoint: document.querySelector("#qwenEndpoint"),
-  sendFeishu: document.querySelector("#sendFeishu"),
-  feishuWebhook: document.querySelector("#feishuWebhook"),
 };
 
 const stepMeta = [
@@ -58,8 +55,8 @@ const stepMeta = [
     hint: "预训练单任务目标次数最多 60 次，后训练最多 600 次；本次输出条数另行填写。",
   },
   {
-    title: "步骤 4：审核并生成",
-    hint: "确认摘要后调用 Qwen，结果会先校验再导出。",
+    title: "步骤 4：生成和导出",
+    hint: "先生成需求，在右侧编辑区修改后再导出 Excel。",
   },
 ];
 
@@ -69,12 +66,28 @@ let currentStep = 0;
 let healthState = { ok: false, qwenConfigured: false, sheetReady: false };
 let robotPresets = [];
 let schemaState = null;
+let generatedRows = [];
+let lastGenerationSummary = null;
 let taskPhases = {
   pretrain: { label: "预训练", maxTargetTimes: 60 },
   posttrain: { label: "后训练", maxTargetTimes: 600 },
 };
 const maxGenerationTaskCount = 200;
 let ideaBusy = false;
+
+const editableFields = [
+  { key: "任务名称", label: "任务名称", type: "input" },
+  { key: "任务简述", label: "任务简述", type: "textarea" },
+  { key: "采集设备", label: "采集设备", type: "input" },
+  { key: "采集模式", label: "采集模式", type: "input" },
+  { key: "场景域分类", label: "场景域分类", type: "input" },
+  { key: "目标次数", label: "目标次数", type: "input" },
+  { key: "任务级别", label: "任务级别", type: "input" },
+  { key: "任务步骤数量", label: "任务步骤数量", type: "input" },
+  { key: "数采负责人", label: "数采负责人", type: "input" },
+  { key: "机器及环境参数", label: "机器及环境参数", type: "textarea" },
+  { key: "任务步骤描述", label: "任务步骤描述", type: "textarea", wide: true },
+];
 
 function escapeHtml(value) {
   return String(value ?? "")
@@ -189,6 +202,7 @@ function setBusy(isBusy) {
   generateBtn.innerHTML = isBusy
     ? '<span class="btn-mark" aria-hidden="true"></span>Qwen 生成中...'
     : '<span class="btn-mark" aria-hidden="true"></span>调用 Qwen 生成';
+  if (exportBtn) exportBtn.disabled = isBusy || generatedRows.length === 0;
 }
 
 function updateIdeaButton() {
@@ -277,8 +291,6 @@ function collectPayload() {
     matchIdeaCount: true,
     qwenModel: currentQwenModel(),
     qwenEndpoint: controls.qwenEndpoint.value.trim(),
-    sendFeishu: controls.sendFeishu.checked,
-    feishuWebhook: controls.feishuWebhook.value.trim(),
   };
 }
 
@@ -347,9 +359,6 @@ function validateStep(step) {
       return `有效 idea 行数必须在 1 到 ${maxGenerationTaskCount} 之间；本次输出需求条数会自动匹配。`;
     }
   }
-  if (step === 3 && controls.sendFeishu.checked && !controls.feishuWebhook.value.trim()) {
-    return "已开启飞书推送，请填写 webhook。";
-  }
   return "";
 }
 
@@ -363,9 +372,10 @@ function validateReadyToGenerate() {
 
 function updateNav() {
   prevBtn.disabled = currentStep === 0;
-  nextBtn.textContent = currentStep === stepMeta.length - 1 ? "已到审核" : "下一步";
+  nextBtn.textContent = currentStep === stepMeta.length - 1 ? "生成导出" : "下一步";
   nextBtn.disabled = currentStep === stepMeta.length - 1;
   generateBtn.disabled = Boolean(validateReadyToGenerate());
+  if (exportBtn) exportBtn.disabled = generatedRows.length === 0;
   updateIdeaButton();
 }
 
@@ -441,13 +451,13 @@ function renderNotices(notices) {
 }
 
 function updateReviewSummary() {
-  if (!reviewSummary) return;
+  if (!generationSummary) return;
   const robots = collectRobots();
   const ideas = splitIdeas();
   const phase = currentPhaseConfig();
   const generationCount = ideas.length;
   const maxTargetTimes = Number(phase.maxTargetTimes || 60);
-  reviewSummary.innerHTML = `
+  generationSummary.innerHTML = `
     <div class="summary-card">
       <strong>机器人</strong>
       <ul>
@@ -474,61 +484,66 @@ function updateReviewSummary() {
       <small>${escapeHtml(currentQwenModel() || "-")}</small>
       <small>${escapeHtml(controls.qwenEndpoint.value || "-")}</small>
     </div>
-    <div class="summary-card">
-      <strong>飞书</strong>
-      <small>${controls.sendFeishu.checked ? "生成后推送" : "不推送"}</small>
-    </div>
   `;
 }
 
 function renderResults(payload) {
-  const summary = payload.summary || { generated: 0, accepted: 0, rejected: 0 };
-  acceptedMeter.textContent = summary.accepted || 0;
+  const rows = payload.rows || (payload.items || []).map((item) => item.row || {}).filter(Boolean);
+  generatedRows = rows.map((row) => ({ ...row }));
+  lastGenerationSummary = payload.summary || { generated: generatedRows.length };
+  acceptedMeter.textContent = generatedRows.length;
+  downloadLink.href = "#";
+  downloadLink.download = "";
+  downloadLink.classList.add("disabled");
+  downloadLink.setAttribute("aria-disabled", "true");
+  if (exportBtn) exportBtn.disabled = generatedRows.length === 0;
+  const summary = lastGenerationSummary;
   const phaseText = summary.taskPhase ? `${summary.taskPhase} · ` : "";
   const requestedText = summary.requested ? `，本次输出 ${summary.requested} 条需求` : "";
   const targetText = summary.maxTargetTimes ? `，单任务目标次数 ≤ ${summary.maxTargetTimes} 次` : "";
-  resultSummary.textContent = `${phaseText}生成 ${summary.generated || 0} 条${requestedText}${targetText}，通过 ${
-    summary.accepted || 0
-  } 条，拒绝 ${summary.rejected || 0} 条`;
+  resultSummary.textContent = `${phaseText}已生成 ${generatedRows.length} 条${requestedText}${targetText}，可直接编辑后导出。`;
   sourceStatus.textContent = `Qwen: ${payload.model || currentQwenModel() || "-"}`;
   renderNotices(payload.notices || []);
 
-  if (payload.downloadUrl) {
-    downloadLink.href = payload.downloadUrl;
-    downloadLink.download = payload.downloadName || "";
-    downloadLink.classList.remove("disabled");
-    downloadLink.setAttribute("aria-disabled", "false");
-  }
-
-  const items = payload.items || [];
-  resultsEl.innerHTML = items
-    .map((item) => {
-      const row = item.row || {};
-      const status = item.status === "accepted" ? "accepted" : "rejected";
-      const statusText = status === "accepted" ? "通过" : "拒绝";
-      const issues = [...(item.errors || []), ...(item.warnings || [])];
+  resultsEl.innerHTML = generatedRows
+    .map((row, index) => {
       return `
-        <article class="result-card ${status}">
+        <article class="result-card editable-result" data-row-index="${index}">
           <div class="result-title">
             <strong>${escapeHtml(row["任务名称"] || "未命名任务")}</strong>
-            <span class="pill ${status}">${statusText}</span>
+            <span class="pill">需求 ${index + 1}</span>
           </div>
-          <div class="result-meta">
-            <span>${escapeHtml(row["采集设备"] || "-")}</span>
-            <span>${escapeHtml(row["采集模式"] || "-")}</span>
-            <span>${escapeHtml(row["场景域分类"] || "-")}</span>
-            <span>${escapeHtml(row["任务级别"] || "-")}</span>
+          <div class="editable-grid">
+            ${editableFields
+              .map((field) => {
+                const value = row[field.key] ?? "";
+                const control =
+                  field.type === "textarea"
+                    ? `<textarea class="editable-control" data-row-index="${index}" data-field="${escapeHtml(field.key)}" rows="${
+                        field.wide ? 7 : 3
+                      }">${escapeHtml(value)}</textarea>`
+                    : `<input class="editable-control" data-row-index="${index}" data-field="${escapeHtml(field.key)}" value="${escapeHtml(
+                        value
+                      )}" />`;
+                return `<label class="editable-field ${field.wide ? "wide" : ""}"><span>${escapeHtml(field.label)}</span>${control}</label>`;
+              })
+              .join("")}
           </div>
-          <pre class="step-box">${escapeHtml(row["任务步骤描述"] || "")}</pre>
-          ${
-            issues.length
-              ? `<pre class="issue-list">${escapeHtml(issues.map((text) => `- ${text}`).join("\n"))}</pre>`
-              : ""
-          }
         </article>
       `;
     })
     .join("");
+}
+
+function collectEditedRows() {
+  const rows = generatedRows.map((row) => ({ ...row }));
+  resultsEl.querySelectorAll("[data-field]").forEach((control) => {
+    const index = Number(control.dataset.rowIndex);
+    const field = control.dataset.field;
+    if (rows[index] && field) rows[index][field] = control.value;
+  });
+  generatedRows = rows;
+  return rows;
 }
 
 async function loadSchema() {
@@ -554,7 +569,6 @@ async function loadSchema() {
     syncPhaseControls({ clamp: false });
     renderRobotPresets();
     setDot(sheetDot, schema.ok);
-    setDot(feishuDot, null);
     updateWorkbookLabels(schema);
   } catch (error) {
     healthState = { ok: false, qwenConfigured: false, sheetReady: false };
@@ -615,9 +629,16 @@ async function handleGenerate() {
   }
   setBusy(true);
   renderNotices([]);
+  generatedRows = [];
+  lastGenerationSummary = null;
   resultsEl.innerHTML = "";
   resultSummary.textContent = "Qwen 生成中";
   acceptedMeter.textContent = "0";
+  downloadLink.href = "#";
+  downloadLink.download = "";
+  downloadLink.classList.add("disabled");
+  downloadLink.setAttribute("aria-disabled", "true");
+  if (exportBtn) exportBtn.disabled = true;
   try {
     const payload = await jsonFetch("/api/generate", {
       method: "POST",
@@ -630,6 +651,43 @@ async function handleGenerate() {
   } finally {
     setBusy(false);
     updateNav();
+  }
+}
+
+async function handleExport() {
+  const rows = collectEditedRows();
+  if (!rows.length) {
+    renderNotices(["请先生成需求，再编辑并导出。"]);
+    return;
+  }
+  const originalText = exportBtn.textContent;
+  exportBtn.disabled = true;
+  exportBtn.textContent = "导出中...";
+  try {
+    const payload = await jsonFetch("/api/export", {
+      method: "POST",
+      body: JSON.stringify({
+        robots: collectRobots(),
+        rows,
+        taskPhase: currentTaskPhase(),
+      }),
+    });
+    const summary = payload.summary || {};
+    downloadLink.href = payload.downloadUrl || "#";
+    downloadLink.download = payload.downloadName || "";
+    downloadLink.classList.remove("disabled");
+    downloadLink.setAttribute("aria-disabled", "false");
+    const exportedCount = Number.isFinite(Number(summary.accepted)) ? Number(summary.accepted) : rows.length;
+    resultSummary.textContent = `已导出 ${exportedCount} 条需求。`;
+    const notices = payload.downloadUrl ? [`Excel 已导出：${payload.downloadName || "generated.xlsx"}`] : [];
+    if (summary.rejected) notices.push(`${summary.rejected} 条未写入生成结果，原因见 Excel 校验日志。`);
+    renderNotices(notices);
+    if (payload.downloadUrl) downloadLink.click();
+  } catch (error) {
+    renderNotices([`导出失败：${error.message}`]);
+  } finally {
+    exportBtn.textContent = originalText;
+    exportBtn.disabled = generatedRows.length === 0;
   }
 }
 
@@ -679,24 +737,6 @@ async function handleBrainstormIdeas() {
   }
 }
 
-async function handleFeishuTest() {
-  testFeishuBtn.disabled = true;
-  try {
-    await jsonFetch("/api/feishu/test", {
-      method: "POST",
-      body: JSON.stringify({ feishuWebhook: controls.feishuWebhook.value.trim() }),
-    });
-    setDot(feishuDot, true);
-    renderNotices(["飞书 webhook 已连通。"]);
-  } catch (error) {
-    setDot(feishuDot, false);
-    renderNotices([`飞书测试失败：${error.message}`]);
-  } finally {
-    testFeishuBtn.disabled = false;
-    updateReviewSummary();
-  }
-}
-
 addRobotBtn.addEventListener("click", () => addRobot({ brand: "", model: "", endEffector: "夹爪", arms: "双臂" }));
 robotPresetList.addEventListener("click", (event) => {
   const card = event.target.closest(".preset-card");
@@ -717,9 +757,20 @@ nextBtn.addEventListener("click", () => {
   showStep(currentStep + 1);
 });
 generateBtn.addEventListener("click", handleGenerate);
+exportBtn?.addEventListener("click", handleExport);
 brainstormIdeasBtn.addEventListener("click", handleBrainstormIdeas);
-testFeishuBtn.addEventListener("click", handleFeishuTest);
 workbookFile?.addEventListener("change", handleWorkbookUpload);
+resultsEl.addEventListener("input", (event) => {
+  const control = event.target.closest("[data-field]");
+  if (!control) return;
+  const index = Number(control.dataset.rowIndex);
+  const field = control.dataset.field;
+  if (generatedRows[index] && field) {
+    generatedRows[index][field] = control.value;
+    const title = control.closest(".result-card")?.querySelector(".result-title strong");
+    if (title && field === "任务名称") title.textContent = control.value || "未命名任务";
+  }
+});
 controls.taskIdeas.addEventListener("input", () => {
   syncGenerationCountWithIdeas();
   updateReviewSummary();
@@ -749,12 +800,6 @@ controls.qwenModelCustom.addEventListener("input", () => {
   updateNav();
 });
 controls.qwenEndpoint.addEventListener("input", updateReviewSummary);
-controls.sendFeishu.addEventListener("change", () => {
-  updateReviewSummary();
-  updateNav();
-});
-controls.feishuWebhook.addEventListener("input", updateNav);
-
 syncPhaseControls({ clamp: false });
 syncQwenModelCustom();
 syncGenerationCountWithIdeas();

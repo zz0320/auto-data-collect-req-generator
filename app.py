@@ -1367,23 +1367,6 @@ def brainstorm_ideas_response(body: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def post_feishu(webhook: str, text: str) -> dict[str, Any]:
-    payload = {"msg_type": "text", "content": {"text": text}}
-    data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
-    req = request.Request(
-        webhook,
-        data=data,
-        headers={"Content-Type": "application/json"},
-        method="POST",
-    )
-    with request.urlopen(req, timeout=20) as resp:
-        body = resp.read().decode("utf-8")
-    try:
-        return json.loads(body)
-    except json.JSONDecodeError:
-        return {"raw": body}
-
-
 def generation_response(body: dict[str, Any]) -> dict[str, Any]:
     robots = parse_robots(body.get("robots"))
     if not robots:
@@ -1426,23 +1409,6 @@ def generation_response(body: dict[str, Any]) -> dict[str, Any]:
     validations = validate_tasks(generated_rows, robots, task_phase)
     accepted_count = sum(1 for item in validations if item["status"] == "accepted")
     rejected_count = len(validations) - accepted_count
-    output_path = write_xlsx(validations, robots)
-    download_url = f"/download/{output_path.name}"
-
-    webhook = str(body.get("feishuWebhook") or os.getenv("FEISHU_WEBHOOK", "")).strip()
-    feishu_result: dict[str, Any] | None = None
-    if webhook and parse_bool(body.get("sendFeishu", False)):
-        text = (
-            "机器人数据需求生成完成\n"
-            f"来源：{source}\n"
-            f"通过：{accepted_count}，拒绝：{rejected_count}\n"
-            f"文件：{download_url}\n"
-            f"时间：{now_text()}"
-        )
-        try:
-            feishu_result = post_feishu(webhook, text)
-        except (HTTPError, URLError, TimeoutError) as exc:
-            notices.append(f"飞书 webhook 推送失败：{exc}")
 
     return {
         "ok": True,
@@ -1450,8 +1416,6 @@ def generation_response(body: dict[str, Any]) -> dict[str, Any]:
         "model": model,
         "endpoint": endpoint,
         "notices": notices,
-        "downloadUrl": download_url,
-        "downloadName": output_path.name,
         "summary": {
             "generated": len(validations),
             "accepted": accepted_count,
@@ -1462,7 +1426,36 @@ def generation_response(body: dict[str, Any]) -> dict[str, Any]:
         },
         "capabilities": [derive_capabilities(robot) for robot in robots],
         "items": validations,
-        "feishu": feishu_result,
+        "rows": [item["row"] for item in validations],
+    }
+
+
+def export_response(body: dict[str, Any]) -> dict[str, Any]:
+    robots = parse_robots(body.get("robots"))
+    if not robots:
+        raise ValueError("至少需要输入一台机器人配置")
+    rows = body.get("rows")
+    if not isinstance(rows, list) or not rows:
+        raise ValueError("没有可导出的需求，请先生成需求")
+    task_phase = parse_task_phase(body.get("taskPhase"))
+    validations = validate_tasks([row for row in rows if isinstance(row, dict)], robots, task_phase)
+    if not validations:
+        raise ValueError("没有可导出的有效需求行")
+    accepted_count = sum(1 for item in validations if item["status"] == "accepted")
+    rejected_count = len(validations) - accepted_count
+    output_path = write_xlsx(validations, robots)
+    return {
+        "ok": True,
+        "downloadUrl": f"/download/{output_path.name}",
+        "downloadName": output_path.name,
+        "summary": {
+            "generated": len(validations),
+            "accepted": accepted_count,
+            "rejected": rejected_count,
+            "taskPhase": TASK_PHASES[task_phase]["label"],
+            "maxTargetTimes": int(TASK_PHASES[task_phase]["maxTargetTimes"]),
+        },
+        "items": validations,
     }
 
 
@@ -1569,6 +1562,10 @@ class Handler(BaseHTTPRequestHandler):
                 body = self.read_json_body()
                 self.send_json(generation_response(body))
                 return
+            if parsed.path == "/api/export":
+                body = self.read_json_body()
+                self.send_json(export_response(body))
+                return
             if parsed.path == "/api/ideas/brainstorm":
                 body = self.read_json_body()
                 self.send_json(brainstorm_ideas_response(body))
@@ -1584,14 +1581,6 @@ class Handler(BaseHTTPRequestHandler):
                 saved_path.write_bytes(file_data)
                 summary = set_active_workbook(saved_path)
                 self.send_json({"ok": True, "summary": summary})
-                return
-            if parsed.path == "/api/feishu/test":
-                body = self.read_json_body()
-                webhook = str(body.get("feishuWebhook") or os.getenv("FEISHU_WEBHOOK", "")).strip()
-                if not webhook:
-                    raise ValueError("缺少飞书 webhook")
-                result = post_feishu(webhook, f"飞书小助手连通性测试：{now_text()}")
-                self.send_json({"ok": True, "result": result})
                 return
             self.send_error(HTTPStatus.NOT_FOUND)
         except json.JSONDecodeError:

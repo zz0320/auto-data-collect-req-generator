@@ -55,7 +55,7 @@ a {
 }
 
 .app-shell {
-  width: min(1480px, calc(100vw - 32px));
+  width: min(1480px, calc(100vw - 48px));
   margin: 0 auto;
   padding: 24px 0 36px;
 }
@@ -423,7 +423,7 @@ h3 {
 .control-grid,
 .robot-grid,
 .toggle-grid,
-.review-summary {
+.generation-summary {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 10px;
@@ -438,8 +438,7 @@ h3 {
 .result-card,
 .notice,
 .capability-item,
-.summary-card,
-.feishu-box {
+.summary-card {
   border: 2px solid var(--line);
   background: var(--paper);
   box-shadow: var(--shadow-small);
@@ -528,14 +527,15 @@ a:focus-visible {
 .results-grid {
   display: grid;
   gap: 12px;
+  min-width: 0;
 }
 
 .preset-list {
   grid-template-columns: repeat(2, minmax(0, 1fr));
   max-height: 380px;
   overflow: auto;
-  gap: 18px;
-  padding: 2px 12px 12px 2px;
+  gap: 22px;
+  padding: 2px 14px 18px 2px;
 }
 
 .preset-card {
@@ -543,8 +543,8 @@ a:focus-visible {
   gap: 6px;
   width: 100%;
   min-width: 0;
-  min-height: 152px;
-  padding: 12px 14px 14px;
+  min-height: 178px;
+  padding: 12px 14px 20px;
   border: 2px solid var(--line);
   border-radius: 0;
   background: var(--paper);
@@ -552,6 +552,7 @@ a:focus-visible {
   align-content: start;
   text-align: left;
   cursor: pointer;
+  overflow: visible;
 }
 
 .preset-card:hover {
@@ -567,11 +568,15 @@ a:focus-visible {
 .preset-card strong {
   font-size: 15px;
   line-height: 1.25;
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 
 .preset-card small {
   color: var(--muted);
   line-height: 1.35;
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 
 .preset-meta {
@@ -595,6 +600,7 @@ a:focus-visible {
   background: var(--lavender);
   font-size: 12px;
   font-weight: 800;
+  line-height: 1.25;
   overflow-wrap: anywhere;
   word-break: break-word;
   white-space: normal;
@@ -822,16 +828,15 @@ a:focus-visible {
   border: 2px solid var(--line);
 }
 
-.feishu-box {
-  display: grid;
-  gap: 10px;
-  padding: 12px;
-  background: var(--lavender);
-}
-
 .summary-card strong {
   display: block;
   margin-bottom: 4px;
+}
+
+.summary-card small,
+.summary-card li {
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .summary-card ul {
@@ -853,10 +858,13 @@ a:focus-visible {
 }
 
 .notice {
+  min-width: 0;
   padding: 10px;
   border-color: var(--red);
   background: #ffe1d6;
   line-height: 1.45;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .results-grid {
@@ -865,7 +873,44 @@ a:focus-visible {
 }
 
 .result-card {
+  min-width: 0;
   padding: 12px;
+}
+
+.editable-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.editable-field {
+  display: grid;
+  gap: 5px;
+  min-width: 0;
+}
+
+.editable-field.wide {
+  grid-column: 1 / -1;
+}
+
+.editable-field span {
+  font-size: 12px;
+  font-weight: 900;
+  color: var(--muted);
+}
+
+.editable-control {
+  width: 100%;
+  min-width: 0;
+  border: 2px solid var(--line);
+  background: var(--paper);
+  padding: 7px 8px;
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+textarea.editable-control {
+  resize: vertical;
 }
 
 .result-card.accepted {
@@ -986,7 +1031,8 @@ a:focus-visible {
   .toggle-grid,
   .phase-picker,
   .preset-list,
-  .review-summary,
+  .generation-summary,
+  .editable-grid,
   .results-grid {
     grid-template-columns: 1fr;
   }
