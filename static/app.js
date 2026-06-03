@@ -11,6 +11,8 @@ const sheetDot = document.querySelector("#sheetDot");
 const feishuDot = document.querySelector("#feishuDot");
 const qwenReadiness = document.querySelector("#qwenReadiness");
 const sheetReadiness = document.querySelector("#sheetReadiness");
+const workbookFile = document.querySelector("#workbookFile");
+const workbookSourceText = document.querySelector("#workbookSourceText");
 const wizardTitle = document.querySelector("#wizardTitle");
 const wizardHint = document.querySelector("#wizardHint");
 const stepMeter = document.querySelector("#stepMeter");
@@ -66,6 +68,7 @@ const initialRobots = [];
 let currentStep = 0;
 let healthState = { ok: false, qwenConfigured: false, sheetReady: false };
 let robotPresets = [];
+let schemaState = null;
 let taskPhases = {
   pretrain: { label: "预训练", maxTargetTimes: 60 },
   posttrain: { label: "后训练", maxTargetTimes: 600 },
@@ -205,13 +208,8 @@ function setIdeaBusy(isBusy) {
 }
 
 async function jsonFetch(url, options = {}) {
-  const response = await fetch(url, {
-    ...options,
-    headers: {
-      "Content-Type": "application/json",
-      ...(options.headers || {}),
-    },
-  });
+  const headers = options.body instanceof FormData ? options.headers || {} : { "Content-Type": "application/json", ...(options.headers || {}) };
+  const response = await fetch(url, { ...options, headers });
   const payload = await response.json().catch(() => ({}));
   if (!response.ok || payload.ok === false) {
     throw new Error(payload.error || `${response.status} ${response.statusText}`);
@@ -369,6 +367,18 @@ function updateNav() {
   nextBtn.disabled = currentStep === stepMeta.length - 1;
   generateBtn.disabled = Boolean(validateReadyToGenerate());
   updateIdeaButton();
+}
+
+function updateWorkbookLabels(schema = schemaState) {
+  if (!schema) return;
+  const devices = (schema.devices || []).slice(0, 4).map(([name]) => name).join("、");
+  const ragCount = Number(schema.ragDocumentCount || 0);
+  sheetReadiness.textContent = `${schema.rows || 0} 条样例，${schema.headers?.length || 0} 个字段，RAG ${ragCount} 条`;
+  schemaLine.textContent = `${schema.sheet || "数据表"}：${schema.rows || 0} 条样例；RAG 索引 ${ragCount} 条；常见设备 ${devices || "-"}`;
+  if (workbookSourceText) {
+    const sourceName = schema.source ? schema.source.split(/[\\/]/).pop() : "默认存量表";
+    workbookSourceText.textContent = `${sourceName} · RAG ${ragCount} 条`;
+  }
 }
 
 function showStep(step) {
@@ -537,6 +547,7 @@ async function loadSchema() {
     qwenReadiness.textContent = health.qwenConfigured ? "服务端已配置" : "缺少 DASHSCOPE_API_KEY";
 
     const schema = await jsonFetch("/api/schema");
+    schemaState = schema;
     healthState.sheetReady = Boolean(schema.ok);
     robotPresets = schema.robotPresets || [];
     normalizeTaskPhases(schema.taskPhases || {});
@@ -544,10 +555,7 @@ async function loadSchema() {
     renderRobotPresets();
     setDot(sheetDot, schema.ok);
     setDot(feishuDot, null);
-    const devices = (schema.devices || []).slice(0, 4).map(([name]) => name).join("、");
-    const ragCount = Number(schema.ragDocumentCount || 0);
-    sheetReadiness.textContent = `${schema.rows || 0} 条样例，${schema.headers?.length || 0} 个字段，RAG ${ragCount} 条`;
-    schemaLine.textContent = `${schema.sheet || "数据表"}：${schema.rows || 0} 条样例；RAG 索引 ${ragCount} 条；常见设备 ${devices || "-"}`;
+    updateWorkbookLabels(schema);
   } catch (error) {
     healthState = { ok: false, qwenConfigured: false, sheetReady: false };
     serverStatus.textContent = "后端未连接";
@@ -561,6 +569,40 @@ async function loadSchema() {
   } finally {
     updateReviewSummary();
     renderRobotPresets();
+    updateNav();
+  }
+}
+
+async function handleWorkbookUpload() {
+  const file = workbookFile?.files?.[0];
+  if (!file) return;
+  if (!file.name.toLowerCase().endsWith(".xlsx")) {
+    renderNotices(["请选择 .xlsx 格式的存量数据表。"]);
+    workbookFile.value = "";
+    return;
+  }
+  if (workbookSourceText) workbookSourceText.textContent = "正在读取并重建 RAG...";
+  setDot(sheetDot, null);
+  try {
+    const form = new FormData();
+    form.append("workbook", file);
+    const payload = await jsonFetch("/api/workbook/upload", { method: "POST", body: form });
+    const schema = payload.summary || {};
+    schemaState = schema;
+    healthState.sheetReady = Boolean(schema.ok);
+    robotPresets = schema.robotPresets || [];
+    normalizeTaskPhases(schema.taskPhases || {});
+    renderRobotPresets();
+    updateWorkbookLabels(schema);
+    setDot(sheetDot, schema.ok);
+    renderNotices([`已切换 RAG Excel：${file.name}，索引 ${Number(schema.ragDocumentCount || 0)} 条。`]);
+  } catch (error) {
+    setDot(sheetDot, false);
+    renderNotices([`RAG Excel 切换失败：${error.message}`]);
+    updateWorkbookLabels();
+  } finally {
+    workbookFile.value = "";
+    updateReviewSummary();
     updateNav();
   }
 }
@@ -677,6 +719,7 @@ nextBtn.addEventListener("click", () => {
 generateBtn.addEventListener("click", handleGenerate);
 brainstormIdeasBtn.addEventListener("click", handleBrainstormIdeas);
 testFeishuBtn.addEventListener("click", handleFeishuTest);
+workbookFile?.addEventListener("change", handleWorkbookUpload);
 controls.taskIdeas.addEventListener("input", () => {
   syncGenerationCountWithIdeas();
   updateReviewSummary();

@@ -534,19 +534,22 @@ a:focus-visible {
   grid-template-columns: repeat(2, minmax(0, 1fr));
   max-height: 380px;
   overflow: auto;
-  padding: 2px 6px 6px 2px;
+  gap: 18px;
+  padding: 2px 12px 12px 2px;
 }
 
 .preset-card {
   display: grid;
   gap: 6px;
   width: 100%;
-  min-height: 116px;
-  padding: 11px;
+  min-width: 0;
+  min-height: 152px;
+  padding: 12px 14px 14px;
   border: 2px solid var(--line);
   border-radius: 0;
   background: var(--paper);
   box-shadow: var(--shadow-small);
+  align-content: start;
   text-align: left;
   cursor: pointer;
 }
@@ -574,24 +577,69 @@ a:focus-visible {
 .preset-meta {
   display: flex;
   flex-wrap: wrap;
+  align-content: start;
   gap: 5px;
+  min-width: 0;
+  max-width: 100%;
 }
 
 .preset-meta span,
 .section-label {
   display: inline-flex;
   align-items: center;
+  flex: 0 1 auto;
+  max-width: 100%;
   min-height: 25px;
   padding: 3px 6px;
   border: 2px solid var(--line);
   background: var(--lavender);
   font-size: 12px;
   font-weight: 800;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  white-space: normal;
 }
 
 .section-label {
   width: fit-content;
   background: var(--yellow);
+}
+
+.workbook-picker {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-width: 0;
+  margin-bottom: 14px;
+  padding: 12px;
+  border: 2px solid var(--line);
+  background: var(--surface);
+  box-shadow: var(--shadow-small);
+}
+
+.workbook-picker > div {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.workbook-picker strong,
+.workbook-picker small {
+  min-width: 0;
+}
+
+.workbook-picker small {
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+
+.file-picker-btn input {
+  position: absolute;
+  inline-size: 1px;
+  block-size: 1px;
+  opacity: 0;
+  pointer-events: none;
 }
 
 .phase-picker {

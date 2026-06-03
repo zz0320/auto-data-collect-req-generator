@@ -30,6 +30,7 @@ else:
 ROOT = Path(__file__).resolve().parent
 STATIC_DIR = ROOT / "static"
 OUTPUT_DIR = ROOT / "outputs" / "generated"
+WORKBOOK_UPLOAD_DIR = ROOT / "work" / "rag_uploads"
 
 
 def load_local_env() -> None:
@@ -60,6 +61,7 @@ DEFAULT_SOURCE_XLSX = Path(
         "/Users/kenton/Downloads/模型训练记录表_数据需求总表同步_收集结果-有效.xlsx",
     )
 )
+CURRENT_SOURCE_XLSX = DEFAULT_SOURCE_XLSX
 
 
 def env_int(name: str, default: int) -> int:
@@ -215,6 +217,36 @@ def split_device_name(device: str) -> tuple[str, str]:
     if match and match.group(1) != text:
         return match.group(1), match.group(2)
     return text, ""
+
+
+def safe_upload_filename(filename: str) -> str:
+    name = Path(str(filename or "")).name
+    name = re.sub(r"[^\w.\-\u4e00-\u9fff]+", "_", name).strip("._")
+    if not name.lower().endswith(".xlsx"):
+        raise ValueError("请选择 .xlsx 存量数据表")
+    return name or "rag-source.xlsx"
+
+
+def extract_multipart_file(body: bytes, content_type: str) -> tuple[str, bytes]:
+    match = re.search(r"boundary=([^;]+)", content_type or "")
+    if not match:
+        raise ValueError("上传请求缺少 multipart boundary")
+    boundary = match.group(1).strip().strip('"').encode("utf-8")
+    marker = b"--" + boundary
+    for part in body.split(marker):
+        part = part.strip()
+        if not part or part == b"--":
+            continue
+        if part.endswith(b"--"):
+            part = part[:-2].rstrip()
+        if b"\r\n\r\n" not in part:
+            continue
+        header_raw, file_data = part.split(b"\r\n\r\n", 1)
+        headers = header_raw.decode("utf-8", errors="replace")
+        filename_match = re.search(r'filename="([^"]+)"', headers)
+        if "name=\"workbook\"" in headers and filename_match:
+            return safe_upload_filename(filename_match.group(1)), file_data.rstrip(b"\r\n")
+    raise ValueError("上传请求缺少 workbook 文件字段")
 
 
 def action_key_from_workbook_label(label: str) -> str | None:
@@ -418,13 +450,14 @@ def today_midnight_text() -> str:
     return datetime.now().strftime("%Y-%m-%d 00:00:00")
 
 
-def load_workbook_summary() -> dict[str, Any]:
+def load_workbook_summary(source_path: Path | None = None) -> dict[str, Any]:
+    source = Path(source_path or CURRENT_SOURCE_XLSX)
     if OPENPYXL_IMPORT_ERROR:
         return {"ok": False, "error": f"openpyxl unavailable: {OPENPYXL_IMPORT_ERROR}"}
-    if not DEFAULT_SOURCE_XLSX.exists():
-        return {"ok": False, "error": f"source workbook not found: {DEFAULT_SOURCE_XLSX}"}
+    if not source.exists():
+        return {"ok": False, "error": f"source workbook not found: {source}"}
 
-    wb = openpyxl.load_workbook(DEFAULT_SOURCE_XLSX, read_only=True, data_only=True)
+    wb = openpyxl.load_workbook(source, read_only=True, data_only=True)
     ws = wb.active
     raw_headers = list(next(ws.iter_rows(min_row=1, max_row=1, values_only=True)))
     headers = [header for header in raw_headers if header]
@@ -542,7 +575,7 @@ def load_workbook_summary() -> dict[str, Any]:
 
     return {
         "ok": True,
-        "source": str(DEFAULT_SOURCE_XLSX),
+        "source": str(source),
         "sheet": ws.title,
         "rows": max(ws.max_row - 1, 0),
         "columns": ws.max_column,
@@ -561,10 +594,27 @@ def load_workbook_summary() -> dict[str, Any]:
     }
 
 
-WORKBOOK_SUMMARY = load_workbook_summary()
-RAG_DOCUMENTS = WORKBOOK_SUMMARY.pop("ragDocuments", []) if isinstance(WORKBOOK_SUMMARY, dict) else []
-if isinstance(WORKBOOK_SUMMARY, dict) and WORKBOOK_SUMMARY.get("ok"):
-    WORKBOOK_SUMMARY["ragDocumentCount"] = len(RAG_DOCUMENTS)
+def set_active_workbook(source_path: Path | str) -> dict[str, Any]:
+    global CURRENT_SOURCE_XLSX, WORKBOOK_SUMMARY, RAG_DOCUMENTS
+    source = Path(source_path)
+    summary = load_workbook_summary(source)
+    if not summary.get("ok"):
+        raise ValueError(str(summary.get("error") or "存量数据需求表读取失败"))
+    docs = summary.pop("ragDocuments", [])
+    summary["ragDocumentCount"] = len(docs)
+    CURRENT_SOURCE_XLSX = source
+    WORKBOOK_SUMMARY = summary
+    RAG_DOCUMENTS = docs
+    return WORKBOOK_SUMMARY
+
+
+WORKBOOK_SUMMARY: dict[str, Any] = {}
+RAG_DOCUMENTS: list[dict[str, Any]] = []
+try:
+    set_active_workbook(DEFAULT_SOURCE_XLSX)
+except ValueError as exc:
+    WORKBOOK_SUMMARY = {"ok": False, "error": str(exc), "source": str(DEFAULT_SOURCE_XLSX)}
+    RAG_DOCUMENTS = []
 
 
 def parse_bool(value: Any) -> bool:
@@ -1448,6 +1498,12 @@ class Handler(BaseHTTPRequestHandler):
             raise ValueError("请求体过大")
         return json.loads(raw.decode("utf-8"))
 
+    def read_binary_body(self, limit: int = 30_000_000) -> bytes:
+        length = int(self.headers.get("Content-Length") or 0)
+        if length > limit:
+            raise ValueError("上传文件过大")
+        return self.rfile.read(length) if length else b""
+
     def do_OPTIONS(self) -> None:
         self.send_response(204)
         self.send_header("Access-Control-Allow-Origin", "*")
@@ -1463,7 +1519,8 @@ class Handler(BaseHTTPRequestHandler):
                 {
                     "ok": OPENPYXL_IMPORT_ERROR is None,
                     "time": now_text(),
-                    "sourceWorkbook": str(DEFAULT_SOURCE_XLSX),
+                    "sourceWorkbook": str(CURRENT_SOURCE_XLSX),
+                    "defaultSourceWorkbook": str(DEFAULT_SOURCE_XLSX),
                     "openpyxlError": str(OPENPYXL_IMPORT_ERROR) if OPENPYXL_IMPORT_ERROR else "",
                     "qwenConfigured": bool(os.getenv("DASHSCOPE_API_KEY", "").strip()),
                     "qwenModel": DEFAULT_QWEN_MODEL,
@@ -1515,6 +1572,18 @@ class Handler(BaseHTTPRequestHandler):
             if parsed.path == "/api/ideas/brainstorm":
                 body = self.read_json_body()
                 self.send_json(brainstorm_ideas_response(body))
+                return
+            if parsed.path == "/api/workbook/upload":
+                raw = self.read_binary_body()
+                filename, file_data = extract_multipart_file(raw, self.headers.get("Content-Type", ""))
+                if not file_data:
+                    raise ValueError("上传文件为空")
+                WORKBOOK_UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+                saved_name = f"{datetime.now().strftime('%Y%m%d_%H%M%S')}_{filename}"
+                saved_path = WORKBOOK_UPLOAD_DIR / saved_name
+                saved_path.write_bytes(file_data)
+                summary = set_active_workbook(saved_path)
+                self.send_json({"ok": True, "summary": summary})
                 return
             if parsed.path == "/api/feishu/test":
                 body = self.read_json_body()
