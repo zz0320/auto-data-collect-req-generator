@@ -34,7 +34,7 @@ DASHSCOPE_API_KEY=你的_key python3 app.py
 DASHSCOPE_API_KEY=你的_key
 ```
 
-默认模型是 `qwen3.7-max`，界面第 1 步可以从下拉框选择 `qwen3.7-max`、`qwen3.7-plus`、`qwen3.6-flash`、`qwen3-max`、`qwen-plus`、`qwen-turbo`，也可以填写自定义模型名。默认 endpoint 是 DashScope 文本生成接口。
+默认模型是 `qwen3.7-max`，界面第 1 步可以从下拉框选择 `qwen3.7-max`、`qwen3-max`、`qwen-plus`、`qwen-turbo`，也可以填写自定义模型名。默认 endpoint 是 DashScope 文本生成接口。
 
 ## 任务阶段
 
@@ -47,7 +47,12 @@ DASHSCOPE_API_KEY=你的_key
 
 `任务 idea` 每一行对应一条数据需求，`本次输出需求条数` 会自动匹配有效 idea 行数。它和 `目标次数` 不是同一个概念。
 
-存量 Excel 不会原样整表塞进模型，而是整理成字段结构、动作词表、设备/场景/难度分布和代表性样例片段，作为资源包输入 Qwen。
+存量 Excel 不会原样整表塞进模型，而是先整理成两类资源包输入 Qwen：
+
+- 全局摘要：字段结构、动作词表、设备/场景/难度分布和代表性样例片段。
+- 本地 RAG：服务启动时把有效历史任务建成本地关键词检索索引；每次生成或自动脑洞时，按机器人配置和 idea 检索 Top-K 相似任务，把采集设备、场景域、动作标签、目标次数和步骤颗粒度作为上下文注入 prompt。
+
+当前 RAG 是轻量关键词/BM25-like 检索，不依赖外部向量库；它用于约束格式和任务颗粒度，不会要求模型照抄历史任务。
 
 ## 飞书
 

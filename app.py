@@ -62,6 +62,18 @@ DEFAULT_SOURCE_XLSX = Path(
     )
 )
 
+
+def env_int(name: str, default: int) -> int:
+    try:
+        value = int(float(os.getenv(name, str(default))))
+    except (TypeError, ValueError):
+        return default
+    return max(value, 1)
+
+
+QWEN_GENERATION_TIMEOUT_SECONDS = env_int("QWEN_GENERATION_TIMEOUT_SECONDS", 180)
+QWEN_IDEA_TIMEOUT_SECONDS = env_int("QWEN_IDEA_TIMEOUT_SECONDS", 180)
+
 QWEN_MODEL_OPTIONS = [
     {
         "id": "qwen3.7-max",
@@ -70,34 +82,22 @@ QWEN_MODEL_OPTIONS = [
         "description": "官方模型页当前千问文本生成首位，适合高质量数据需求生成。",
     },
     {
-        "id": "qwen3.7-plus",
-        "label": "Qwen3.7-Plus",
-        "tag": "最新 Plus",
-        "description": "较新的 Plus 模型，适合兼顾效果与成本。",
-    },
-    {
-        "id": "qwen3.6-flash",
-        "label": "Qwen3.6-Flash",
-        "tag": "快",
-        "description": "官方模型页列出的低延迟模型，适合快速试跑。",
-    },
-    {
         "id": "qwen3-max",
         "label": "Qwen3-Max",
         "tag": "兼容",
-        "description": "原型此前默认模型，保留用于兼容。",
+        "description": "当前 DashScope 文本生成接口已验证可用的强模型。",
     },
     {
         "id": "qwen-plus",
         "label": "Qwen-Plus",
         "tag": "稳妥",
-        "description": "DashScope API 示例常用模型，成本和效果均衡。",
+        "description": "当前 DashScope 文本生成接口已验证可用，成本和效果均衡。",
     },
     {
         "id": "qwen-turbo",
         "label": "Qwen-Turbo",
         "tag": "低成本",
-        "description": "适合低成本批量草稿。",
+        "description": "当前 DashScope 文本生成接口已验证可用，适合快速试跑和低成本草稿。",
     },
 ]
 
@@ -226,6 +226,146 @@ def action_key_from_workbook_label(label: str) -> str | None:
     return first or None
 
 
+def truncate_text(value: Any, limit: int) -> str:
+    text = str(value or "").strip()
+    if len(text) <= limit:
+        return text
+    return text[: limit - 1].rstrip() + "…"
+
+
+def rag_tokenize(*values: Any) -> set[str]:
+    text = " ".join(str(value or "").lower() for value in values)
+    tokens = set(re.findall(r"[a-z0-9][a-z0-9_-]{1,}", text))
+    han_runs = re.findall(r"[\u4e00-\u9fff]{2,}", text)
+    for run in han_runs:
+        tokens.add(run)
+        for size in (2, 3):
+            for index in range(max(len(run) - size + 1, 0)):
+                tokens.add(run[index : index + size])
+    return tokens
+
+
+def build_rag_document(item: dict[str, Any], serial: int) -> dict[str, Any]:
+    steps = str(item.get("任务步骤描述") or "")
+    actions: list[str] = []
+    for action_label in re.findall(r"<([^<>]+)>", steps):
+        action_key = action_key_from_workbook_label(action_label)
+        if action_key and action_key in CANONICAL_ACTIONS and action_key not in actions:
+            actions.append(action_key)
+    doc = {
+        "serial": serial,
+        "任务名称": str(item.get("任务名称") or "").strip(),
+        "任务简述": str(item.get("任务简述") or "").strip(),
+        "采集设备": str(item.get("采集设备") or "").strip(),
+        "采集模式": str(item.get("采集模式") or "").strip(),
+        "场景域分类": str(item.get("场景域分类") or "").strip(),
+        "任务步骤描述": steps,
+        "目标次数": item.get("目标次数") or "",
+        "任务级别": str(item.get("任务级别") or "").strip(),
+        "任务步骤数量": item.get("任务步骤数量") or "",
+        "动作标签": actions,
+    }
+    doc["_tokens"] = rag_tokenize(
+        doc["任务名称"],
+        doc["任务简述"],
+        doc["采集设备"],
+        doc["采集模式"],
+        doc["场景域分类"],
+        doc["任务步骤描述"],
+        " ".join(actions),
+        " ".join(CANONICAL_ACTIONS.get(action, action) for action in actions),
+    )
+    return doc
+
+
+def compact_rag_example(doc: dict[str, Any], idea: str = "", max_steps: int = 320) -> dict[str, Any]:
+    return {
+        "匹配idea": idea,
+        "任务名称": doc.get("任务名称", ""),
+        "任务简述": truncate_text(doc.get("任务简述", ""), 120),
+        "采集设备": doc.get("采集设备", ""),
+        "采集模式": doc.get("采集模式", ""),
+        "场景域分类": doc.get("场景域分类", ""),
+        "任务级别": doc.get("任务级别", ""),
+        "目标次数": doc.get("目标次数", ""),
+        "任务步骤数量": doc.get("任务步骤数量", ""),
+        "动作标签": doc.get("动作标签", []),
+        "任务步骤描述": truncate_text(doc.get("任务步骤描述", ""), max_steps),
+    }
+
+
+def retrieve_rag_examples(
+    idea: str,
+    robots: list["RobotProfile"],
+    rag_documents: list[dict[str, Any]] | None = None,
+    limit: int = 6,
+) -> list[dict[str, Any]]:
+    documents = rag_documents if rag_documents is not None else RAG_DOCUMENTS
+    if not documents or limit <= 0:
+        return []
+
+    idea_tokens = rag_tokenize(idea)
+    robot_identity_tokens = rag_tokenize(" ".join(f"{robot.name} {robot.brand} {robot.model}" for robot in robots))
+    query_tokens = idea_tokens or robot_identity_tokens
+    robot_names = {robot.name for robot in robots}
+    robot_brands = {robot.brand.strip() for robot in robots if robot.brand.strip()}
+    robot_modes = {robot.arms for robot in robots if robot.arms}
+    idea_text = str(idea or "").strip()
+    scored: list[tuple[float, dict[str, Any]]] = []
+
+    for doc in documents:
+        doc_tokens = doc.get("_tokens", set())
+        overlap = query_tokens & doc_tokens
+        idea_overlap = idea_tokens & doc_tokens
+        score = float(len(overlap)) + len(idea_overlap) * 3.0
+        doc_text = " ".join(
+            str(doc.get(field) or "")
+            for field in ["任务名称", "任务简述", "采集设备", "采集模式", "场景域分类", "任务步骤描述"]
+        )
+        if idea_text and idea_text in doc_text:
+            score += 8.0
+        device = str(doc.get("采集设备") or "")
+        if device in robot_names:
+            score += 2.0 if idea_overlap else 0.7
+        elif any(brand and brand in device for brand in robot_brands):
+            score += 1.0 if idea_overlap else 0.3
+        if doc.get("采集模式") in robot_modes:
+            score += 0.8 if idea_overlap else 0.2
+        if score > 0:
+            scored.append((score, doc))
+
+    scored.sort(key=lambda item: (-item[0], str(item[1].get("任务名称") or "")))
+    return [compact_rag_example(doc, idea) for _, doc in scored[:limit]]
+
+
+def build_rag_context(
+    robots: list["RobotProfile"],
+    ideas: list[str],
+    limit_per_idea: int = 4,
+    total_limit: int = 12,
+) -> dict[str, Any]:
+    selected: list[dict[str, Any]] = []
+    seen: set[tuple[str, str]] = set()
+    query_ideas = ideas or [robot.name for robot in robots] or ["机器人数据采集"]
+    for idea in query_ideas:
+        for example in retrieve_rag_examples(idea, robots, limit=limit_per_idea):
+            key = (str(example.get("任务名称") or ""), str(example.get("采集设备") or ""))
+            if key in seen:
+                continue
+            selected.append(example)
+            seen.add(key)
+            if len(selected) >= total_limit:
+                break
+        if len(selected) >= total_limit:
+            break
+    return {
+        "enabled": bool(selected),
+        "indexSize": len(RAG_DOCUMENTS),
+        "retrievalMethod": "local_keyword_bm25_like",
+        "examples": selected,
+    }
+
+
 @dataclass
 class RobotProfile:
     brand: str
@@ -296,6 +436,7 @@ def load_workbook_summary() -> dict[str, Any]:
     levels: dict[str, int] = {}
     robot_stats: dict[str, dict[str, Any]] = {}
     examples: list[dict[str, Any]] = []
+    rag_documents: list[dict[str, Any]] = []
     max_auto_id = 0
 
     for row in ws.iter_rows(min_row=2, values_only=True):
@@ -353,9 +494,14 @@ def load_workbook_summary() -> dict[str, Any]:
             value = row[idx] if idx is not None and idx < len(row) else None
             if value:
                 bucket[str(value)] = bucket.get(str(value), 0) + 1
-        if len(examples) < 8:
-            item = {header: row[header_index[header]] for header in TASK_HEADERS if header in header_index}
-            if item.get("任务名称") and item.get("任务步骤描述"):
+        item = {
+            header: row[header_index[header]]
+            for header in TASK_HEADERS
+            if header in header_index and header_index[header] < len(row)
+        }
+        if item.get("任务名称") and item.get("任务步骤描述"):
+            rag_documents.append(build_rag_document(item, len(rag_documents) + 1))
+            if len(examples) < 8:
                 examples.append(item)
 
     robot_presets = []
@@ -412,10 +558,14 @@ def load_workbook_summary() -> dict[str, Any]:
         "taskPhases": TASK_PHASES,
         "qwenModelOptions": QWEN_MODEL_OPTIONS,
         "examples": examples,
+        "ragDocuments": rag_documents,
     }
 
 
 WORKBOOK_SUMMARY = load_workbook_summary()
+RAG_DOCUMENTS = WORKBOOK_SUMMARY.pop("ragDocuments", []) if isinstance(WORKBOOK_SUMMARY, dict) else []
+if isinstance(WORKBOOK_SUMMARY, dict) and WORKBOOK_SUMMARY.get("ok"):
+    WORKBOOK_SUMMARY["ragDocumentCount"] = len(RAG_DOCUMENTS)
 
 
 def parse_bool(value: Any) -> bool:
@@ -454,6 +604,7 @@ def workbook_context_for_prompt(example_limit: int = 8) -> dict[str, Any]:
         "topModes": WORKBOOK_SUMMARY.get("modes", [])[:5],
         "topLevels": WORKBOOK_SUMMARY.get("levels", [])[:5],
         "actions": WORKBOOK_SUMMARY.get("actions", [])[:30],
+        "ragDocumentCount": WORKBOOK_SUMMARY.get("ragDocumentCount", len(RAG_DOCUMENTS)),
         "examples": examples,
     }
 
@@ -649,6 +800,7 @@ def qwen_prompt(
         "format": "任务步骤描述必须逐行编号，每一行末尾必须包含 <动作（中文）><秒数s>。",
     }
     workbook_context = workbook_context_for_prompt(example_limit=6)
+    rag_context = build_rag_context(robots, ideas, limit_per_idea=4, total_limit=12)
     robot_text = "\n".join(
         f"- {robot.summary()}\n  允许动作：{', '.join(derive_capabilities(robot)['allowedActions'])}"
         for robot in robots
@@ -676,6 +828,9 @@ def qwen_prompt(
 存量数据摘要：
 {json.dumps(workbook_context, ensure_ascii=False, indent=2)}
 
+存量数据 RAG 检索上下文（优先参考这些相似历史任务的字段写法、步骤粒度、动作标签和目标次数范围，但不要照抄任务名或步骤）：
+{json.dumps(rag_context, ensure_ascii=False, indent=2)}
+
 字段和动作要求：
 {json.dumps(schema, ensure_ascii=False, indent=2)}
 
@@ -689,6 +844,7 @@ def qwen_prompt(
 7. 输出 tasks 数组长度必须等于“本批次必须生成任务需求条数”。
 8. 同一批内任务名称不能重复；不同机器人之间要结合各自能力差异，不要机械复制同一任务。
 9. 任务简述开头必须带上【{phase["label"]}】。
+10. 优先参考 RAG 样例的采集设备、场景域、动作标签和步骤粒度；禁止简单复制历史任务名称和步骤。
 
 输出 JSON schema：
 {{
@@ -726,7 +882,14 @@ def extract_json_payload(text: str) -> dict[str, Any]:
         return json.loads(match.group(0))
 
 
-def call_qwen_json(system: str, user: str, api_key: str, model: str, endpoint: str, timeout: int = 90) -> dict[str, Any]:
+def call_qwen_json(
+    system: str,
+    user: str,
+    api_key: str,
+    model: str,
+    endpoint: str,
+    timeout: int = QWEN_GENERATION_TIMEOUT_SECONDS,
+) -> dict[str, Any]:
     payload = {
         "model": model or "qwen3-max",
         "input": {
@@ -751,8 +914,34 @@ def call_qwen_json(system: str, user: str, api_key: str, model: str, endpoint: s
         },
         method="POST",
     )
-    with request.urlopen(req, timeout=timeout) as resp:
-        body = json.loads(resp.read().decode("utf-8"))
+    try:
+        with request.urlopen(req, timeout=timeout) as resp:
+            body = json.loads(resp.read().decode("utf-8"))
+    except HTTPError as exc:
+        detail = ""
+        try:
+            detail = exc.read().decode("utf-8", errors="replace").strip()
+        except Exception:
+            detail = ""
+        if detail:
+            try:
+                detail_payload = json.loads(detail)
+            except json.JSONDecodeError:
+                pass
+            else:
+                if isinstance(detail_payload, dict):
+                    detail = "；".join(
+                        str(part)
+                        for part in [
+                            detail_payload.get("code"),
+                            detail_payload.get("message") or detail_payload.get("error"),
+                        ]
+                        if part
+                    ) or detail
+            raise ValueError(f"Qwen HTTP {exc.code}: {truncate_text(detail, 800)}") from exc
+        raise ValueError(f"Qwen HTTP {exc.code}: {exc.reason}") from exc
+    except URLError as exc:
+        raise ValueError(f"Qwen 网络请求失败: {exc.reason}") from exc
     content = ""
     try:
         content = body["output"]["choices"][0]["message"]["content"]
@@ -774,7 +963,7 @@ def call_qwen(
     batch_index: int = 1,
 ) -> list[dict[str, Any]]:
     system, user = qwen_prompt(robots, ideas, task_count, task_phase, batch_index)
-    parsed = call_qwen_json(system, user, api_key, model, endpoint, timeout=90)
+    parsed = call_qwen_json(system, user, api_key, model, endpoint, timeout=QWEN_GENERATION_TIMEOUT_SECONDS)
     tasks = parsed.get("tasks", parsed if isinstance(parsed, list) else [])
     if not isinstance(tasks, list):
         raise ValueError("Qwen response JSON did not contain a tasks array")
@@ -1038,6 +1227,16 @@ def brainstorm_ideas_response(body: dict[str, Any]) -> dict[str, Any]:
         for robot in robots
     )
     workbook_context = workbook_context_for_prompt(example_limit=8)
+    rag_context = build_rag_context(
+        robots,
+        [
+            phase["label"],
+            " ".join(robot.name for robot in robots),
+            "通用抓取放置 家居家政 商超药店 餐饮服务 工业制造",
+        ],
+        limit_per_idea=5,
+        total_limit=16,
+    )
     system = (
         "你是机器人数据采集需求的任务 idea 策划器。你只输出 JSON。"
         "必须结合存量数据分布和机器人真实能力提出新 idea；不确定的能力不要假设。"
@@ -1057,6 +1256,9 @@ def brainstorm_ideas_response(body: dict[str, Any]) -> dict[str, Any]:
 存量数据摘要：
 {json.dumps(workbook_context, ensure_ascii=False, indent=2)}
 
+存量数据 RAG 检索上下文（用于发散 idea，参考既有任务的场景、对象、动作标签和任务颗粒度，但不要照抄任务名）：
+{json.dumps(rag_context, ensure_ascii=False, indent=2)}
+
 要求：
 1. 每个 idea 是短句，不写完整步骤，不写编号。
 2. idea 必须符合至少一台机器人的实际能力；固定工位不要提出跨房间/巡检/货架往返 idea。
@@ -1070,7 +1272,13 @@ def brainstorm_ideas_response(body: dict[str, Any]) -> dict[str, Any]:
   "rationale": "一句话说明这些 idea 如何参考了存量数据"
 }}
 """.strip()
-    parsed = call_qwen_json(system, user, api_key, model, endpoint, timeout=60)
+    try:
+        parsed = call_qwen_json(system, user, api_key, model, endpoint, timeout=QWEN_IDEA_TIMEOUT_SECONDS)
+    except TimeoutError as exc:
+        raise ValueError(
+            f"Qwen 自动脑洞超过 {QWEN_IDEA_TIMEOUT_SECONDS} 秒仍未返回。"
+            "可以减少 idea 数量，或临时切到 qwen-turbo / qwen-plus 后重试。"
+        ) from exc
     ideas = parsed.get("ideas", [])
     if not isinstance(ideas, list):
         raise ValueError("Qwen idea 响应缺少 ideas 数组")

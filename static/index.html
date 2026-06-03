@@ -71,7 +71,7 @@
           <div class="guide-note">
             <strong>生成原则</strong>
             <p>系统只根据已配置的机器人能力生成需求；不具备移动、全身、双臂或灵巧能力时，对应任务会被拒绝。</p>
-            <p>存量表会整理成字段、动作词表、设备/场景分布和样例片段，作为资源包输入 Qwen。</p>
+            <p>存量表会整理成字段、动作词表、分布摘要和本地 RAG 样例，作为资源包输入 Qwen。</p>
           </div>
         </aside>
 
@@ -118,11 +118,9 @@
                   <span>Qwen 模型</span>
                   <select id="qwenModel">
                     <option value="qwen3.7-max" selected>qwen3.7-max（最新旗舰，推荐）</option>
-                    <option value="qwen3.7-plus">qwen3.7-plus（最新 Plus）</option>
-                    <option value="qwen3.6-flash">qwen3.6-flash（快速试跑）</option>
-                    <option value="qwen3-max">qwen3-max（原默认）</option>
-                    <option value="qwen-plus">qwen-plus（均衡）</option>
-                    <option value="qwen-turbo">qwen-turbo（低成本）</option>
+                    <option value="qwen3-max">qwen3-max（强模型，已验证）</option>
+                    <option value="qwen-plus">qwen-plus（均衡，已验证）</option>
+                    <option value="qwen-turbo">qwen-turbo（快速低成本，已验证）</option>
                     <option value="custom">自定义模型名</option>
                   </select>
                   <input id="qwenModelCustom" class="hidden-field" placeholder="例如 qwen3.7-max-2026-05-20" autocomplete="off" />

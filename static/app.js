@@ -545,8 +545,9 @@ async function loadSchema() {
     setDot(sheetDot, schema.ok);
     setDot(feishuDot, null);
     const devices = (schema.devices || []).slice(0, 4).map(([name]) => name).join("、");
-    sheetReadiness.textContent = `${schema.rows || 0} 条样例，${schema.headers?.length || 0} 个字段`;
-    schemaLine.textContent = `${schema.sheet || "数据表"}：${schema.rows || 0} 条样例；常见设备 ${devices || "-"}`;
+    const ragCount = Number(schema.ragDocumentCount || 0);
+    sheetReadiness.textContent = `${schema.rows || 0} 条样例，${schema.headers?.length || 0} 个字段，RAG ${ragCount} 条`;
+    schemaLine.textContent = `${schema.sheet || "数据表"}：${schema.rows || 0} 条样例；RAG 索引 ${ragCount} 条；常见设备 ${devices || "-"}`;
   } catch (error) {
     healthState = { ok: false, qwenConfigured: false, sheetReady: false };
     serverStatus.textContent = "后端未连接";
