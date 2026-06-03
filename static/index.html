@@ -210,6 +210,7 @@
                   Qwen 自动脑洞 idea
                 </button>
               </div>
+              <div id="ideaProgress" class="llm-progress hidden" aria-live="polite" aria-label="Qwen 自动脑洞进度"></div>
               <div class="phase-picker" role="radiogroup" aria-label="任务阶段">
                 <label class="phase-option">
                   <input type="radio" name="taskPhase" value="pretrain" checked />
@@ -238,12 +239,15 @@
                   <small id="phaseLimitText" class="field-help">预训练任务：目标次数最多 60 次</small>
                 </label>
               </div>
-              <label class="field tall-field">
+              <label class="field tall-field idea-field">
                 <span>任务 idea（每行一条）</span>
-                <textarea id="taskIdeas" rows="8">桌面垃圾清理
+                <div class="idea-editor">
+                  <div id="taskIdeaGutter" class="idea-line-gutter" aria-hidden="true"></div>
+                  <textarea id="taskIdeas" rows="8" spellcheck="false">桌面垃圾清理
 餐具摆放
 电池入槽
 超市货架取放</textarea>
+                </div>
                 <small id="ideaStatus" class="field-help" aria-live="polite">已识别 4 个 idea，本次输出需求条数自动匹配。</small>
               </label>
               <div class="control-grid">
@@ -268,6 +272,7 @@
               </div>
 
               <div id="generationSummary" class="generation-summary"></div>
+              <div id="generationProgress" class="llm-progress hidden" aria-live="polite" aria-label="Qwen 需求生成进度"></div>
 
               <div class="action-row">
                 <button id="generateBtn" class="primary-btn" type="button">

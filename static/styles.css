@@ -619,12 +619,162 @@ h3 {
   min-height: 220px;
 }
 
+.idea-field {
+  gap: 7px;
+}
+
+.idea-editor {
+  display: grid;
+  grid-template-columns: 44px minmax(0, 1fr);
+  min-width: 0;
+  border: 2px solid var(--line);
+  background: var(--paper);
+  box-shadow: inset 3px 3px 0 rgba(41, 40, 61, 0.11);
+  overflow: hidden;
+}
+
+.idea-editor:focus-within {
+  box-shadow: var(--focus);
+}
+
+.idea-line-gutter {
+  min-height: 220px;
+  overflow: hidden;
+  border-right: 2px solid var(--line);
+  background:
+    repeating-linear-gradient(
+      to bottom,
+      rgba(52, 166, 132, 0.16) 0,
+      rgba(52, 166, 132, 0.16) 24px,
+      transparent 24px,
+      transparent 48px
+    ),
+    #fff4d0;
+  padding: 8px 0;
+  line-height: 24px;
+  user-select: none;
+}
+
+.idea-row-marker {
+  display: block;
+  height: 24px;
+  border-bottom: 1px solid rgba(41, 40, 61, 0.2);
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 900;
+  line-height: 24px;
+  text-align: center;
+}
+
+.idea-editor textarea {
+  min-height: 220px;
+  border: 0;
+  background:
+    repeating-linear-gradient(
+      to bottom,
+      rgba(255, 207, 97, 0.14) 0,
+      rgba(255, 207, 97, 0.14) 24px,
+      transparent 24px,
+      transparent 48px
+    ),
+    var(--paper);
+  box-shadow: none;
+  line-height: 24px;
+  resize: vertical;
+}
+
 .field input:focus,
 .field textarea:focus,
 .field select:focus,
 button:focus-visible,
 a:focus-visible {
   box-shadow: var(--focus);
+}
+
+.field .idea-editor textarea:focus {
+  box-shadow: none;
+}
+
+.llm-progress {
+  --progress: 0%;
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+  padding: 12px;
+  border: 2px solid var(--line);
+  background: #fff8df;
+  box-shadow: var(--shadow-small);
+}
+
+.llm-progress-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  min-width: 0;
+}
+
+.llm-progress-head strong,
+.llm-progress-head small {
+  display: block;
+}
+
+.llm-progress-head small {
+  margin-top: 4px;
+  color: var(--muted);
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+
+.progress-track {
+  height: 18px;
+  border: 2px solid var(--line);
+  background: var(--paper);
+  overflow: hidden;
+}
+
+.progress-fill {
+  display: block;
+  width: var(--progress);
+  height: 100%;
+  background:
+    repeating-linear-gradient(90deg, rgba(255, 255, 255, 0.28) 0 8px, transparent 8px 16px),
+    var(--green);
+  transition: width 260ms ease;
+}
+
+.llm-progress.is-error .progress-fill {
+  background:
+    repeating-linear-gradient(90deg, rgba(255, 255, 255, 0.28) 0 8px, transparent 8px 16px),
+    var(--red);
+}
+
+.progress-steps {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.progress-step {
+  min-width: 0;
+  padding: 5px 6px;
+  border: 2px solid var(--line);
+  background: var(--paper);
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 900;
+  text-align: center;
+  overflow-wrap: anywhere;
+}
+
+.progress-step.active {
+  background: var(--yellow);
+  color: var(--ink);
+}
+
+.progress-step.done {
+  background: var(--green);
+  color: var(--paper);
 }
 
 .field input[readonly] {
@@ -858,12 +1008,12 @@ a:focus-visible {
 
 .capability-segment {
   display: grid;
-  grid-template-columns: minmax(90px, 0.8fr) minmax(170px, 1.2fr);
-  align-items: center;
-  gap: 10px;
+  grid-template-columns: 1fr;
+  align-items: stretch;
+  gap: 7px;
   min-width: 0;
-  min-height: 48px;
-  padding: 8px;
+  min-height: 78px;
+  padding: 9px;
   border: 2px solid var(--line);
   background: var(--paper);
   box-shadow: var(--shadow-small);
@@ -879,6 +1029,8 @@ a:focus-visible {
 }
 
 .capability-name {
+  display: block;
+  font-size: 14px;
   font-weight: 900;
   overflow-wrap: anywhere;
 }
@@ -895,11 +1047,13 @@ a:focus-visible {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  min-height: 32px;
-  padding: 5px 8px;
+  min-width: 0;
+  min-height: 34px;
+  padding: 5px 6px;
   font-size: 13px;
   font-weight: 900;
   color: var(--muted);
+  white-space: nowrap;
 }
 
 .capability-option + .capability-option {
@@ -916,9 +1070,11 @@ a:focus-visible {
   color: var(--paper);
 }
 
-.capability-segment.is-off [data-capability-off]::before,
-.capability-segment.is-on [data-capability-on]::before {
-  content: "当前：";
+.capability-segment.is-off [data-capability-off]::after,
+.capability-segment.is-on [data-capability-on]::after {
+  content: "✓";
+  margin-left: 6px;
+  font-size: 14px;
 }
 
 .capability-segment:focus-within {

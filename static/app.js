@@ -69,6 +69,9 @@ const noticesEl = document.querySelector("#notices");
 const resultsEl = document.querySelector("#results");
 const generationSummary = document.querySelector("#generationSummary");
 const ideaStatus = document.querySelector("#ideaStatus");
+const taskIdeaGutter = document.querySelector("#taskIdeaGutter");
+const ideaProgress = document.querySelector("#ideaProgress");
+const generationProgress = document.querySelector("#generationProgress");
 const phaseLimitText = document.querySelector("#phaseLimitText");
 const targetTimesLimit = document.querySelector("#targetTimesLimit");
 const taskPhaseInputs = [...document.querySelectorAll('input[name="taskPhase"]')];
@@ -118,6 +121,21 @@ let taskPhases = {
 };
 const maxGenerationTaskCount = 200;
 let ideaBusy = false;
+const llmProgressProfiles = {
+  idea: {
+    panel: ideaProgress,
+    title: "Qwen 正在生成点子",
+    detail: "正在整理机器人能力、存量样例和任务阶段。",
+    steps: ["整理约束", "检索样例", "调用模型", "写入 idea"],
+  },
+  generation: {
+    panel: generationProgress,
+    title: "Qwen 正在生成需求",
+    detail: "正在汇总机器人、idea、RAG 样例和字段格式。",
+    steps: ["整理输入", "检索 RAG", "调用模型", "校验结果"],
+  },
+};
+const llmProgressState = {};
 
 const avatarOptions = [
   { id: "young_man", label: "男生", row: 0, col: 0 },
@@ -242,7 +260,22 @@ function splitIdeas() {
     .filter(Boolean);
 }
 
+function syncIdeaLineMarkers() {
+  if (!taskIdeaGutter || !controls.taskIdeas) return;
+  const lineCount = Math.max(1, controls.taskIdeas.value.split("\n").length);
+  const fragment = document.createDocumentFragment();
+  for (let index = 0; index < lineCount; index += 1) {
+    const marker = document.createElement("span");
+    marker.className = "idea-row-marker";
+    marker.textContent = String(index + 1);
+    fragment.append(marker);
+  }
+  taskIdeaGutter.replaceChildren(fragment);
+  taskIdeaGutter.scrollTop = controls.taskIdeas.scrollTop;
+}
+
 function syncGenerationCountWithIdeas(message = "") {
+  syncIdeaLineMarkers();
   const count = splitIdeas().length;
   controls.generationTaskCount.value = String(count);
   if (ideaStatus && !ideaBusy) {
@@ -425,6 +458,80 @@ function setIdeaBusy(isBusy) {
     ideaStatus.textContent = "正在结合存量数据和机器人能力生成 idea。";
   }
   updateIdeaButton();
+}
+
+function startLlmProgress(kind) {
+  const profile = llmProgressProfiles[kind];
+  if (!profile?.panel) return;
+  if (llmProgressState[kind]?.timer) {
+    window.clearInterval(llmProgressState[kind].timer);
+  }
+  llmProgressState[kind] = {
+    ...profile,
+    progress: 8,
+    activeStep: 0,
+    status: "running",
+    startedAt: Date.now(),
+    timer: null,
+  };
+  renderLlmProgress(kind);
+  llmProgressState[kind].timer = window.setInterval(() => {
+    const state = llmProgressState[kind];
+    if (!state || state.status !== "running") return;
+    const elapsed = Date.now() - state.startedAt;
+    const increment = state.progress < 40 ? 8 : state.progress < 70 ? 4 : 1.5;
+    state.progress = Math.min(88, state.progress + increment);
+    state.activeStep = Math.min(state.steps.length - 1, Math.floor((state.progress / 100) * state.steps.length));
+    if (elapsed > 45000) {
+      state.detail = "模型仍在处理，数据量越大等待越久。请勿刷新页面。";
+    }
+    renderLlmProgress(kind);
+  }, 1400);
+}
+
+function completeLlmProgress(kind, detail, status = "done") {
+  const state = llmProgressState[kind];
+  if (!state) return;
+  if (state.timer) window.clearInterval(state.timer);
+  state.timer = null;
+  state.status = status;
+  state.progress = status === "done" ? 100 : Math.max(state.progress, 88);
+  state.activeStep = status === "done" ? state.steps.length : Math.min(state.activeStep, state.steps.length - 1);
+  state.detail = detail || (status === "done" ? "模型调用完成。" : "模型调用失败。");
+  renderLlmProgress(kind);
+}
+
+function renderLlmProgress(kind) {
+  const state = llmProgressState[kind];
+  if (!state?.panel) return;
+  const percent = Math.max(0, Math.min(100, Math.round(state.progress)));
+  const statusText = state.status === "done" ? "完成" : state.status === "error" ? "失败" : `进行中 ${percent}%`;
+  state.panel.style.setProperty("--progress", `${percent}%`);
+  state.panel.classList.remove("hidden");
+  state.panel.classList.toggle("is-done", state.status === "done");
+  state.panel.classList.toggle("is-error", state.status === "error");
+  state.panel.innerHTML = `
+    <div class="llm-progress-head">
+      <div>
+        <strong>${escapeHtml(state.title)}</strong>
+        <small>${escapeHtml(state.detail)}</small>
+      </div>
+      <span class="pill">${escapeHtml(statusText)}</span>
+    </div>
+    <div class="progress-track" aria-hidden="true">
+      <span class="progress-fill"></span>
+    </div>
+    <div class="progress-steps">
+      ${state.steps
+        .map((step, index) => {
+          const isDone = state.status === "done" || index < state.activeStep;
+          const isActive = state.status === "running" && index === state.activeStep;
+          const className = isDone ? "done" : isActive ? "active" : "";
+          return `<span class="progress-step ${className}">${escapeHtml(step)}</span>`;
+        })
+        .join("")}
+    </div>
+  `;
 }
 
 function updateCapabilityToggleLabels(root = document) {
@@ -877,11 +984,12 @@ async function handleGenerate() {
     return;
   }
   setBusy(true);
+  startLlmProgress("generation");
   renderNotices([]);
   generatedRows = [];
   lastGenerationSummary = null;
   resultsEl.innerHTML = "";
-  resultSummary.textContent = "Qwen 生成中";
+  resultSummary.textContent = "Qwen 正在生成需求，进度见本步骤面板";
   acceptedMeter.textContent = "0";
   downloadLink.href = "#";
   downloadLink.download = "";
@@ -894,9 +1002,11 @@ async function handleGenerate() {
       body: JSON.stringify(collectPayload()),
     });
     renderResults(payload);
+    completeLlmProgress("generation", `已生成 ${generatedRows.length} 条需求，可在右侧编辑。`);
   } catch (error) {
     renderNotices([error.message]);
     resultSummary.textContent = "生成失败";
+    completeLlmProgress("generation", "生成失败，请检查错误提示或 API 配置。", "error");
   } finally {
     setBusy(false);
     updateNav();
@@ -953,6 +1063,7 @@ async function handleBrainstormIdeas() {
     return;
   }
   setIdeaBusy(true);
+  startLlmProgress("idea");
   renderNotices([]);
   try {
     const payload = await jsonFetch("/api/ideas/brainstorm", {
@@ -974,11 +1085,13 @@ async function handleBrainstormIdeas() {
         ? `Qwen 已生成 ${ideas.length} 个 idea：${payload.rationale}`
         : `Qwen 已生成 ${ideas.length} 个 idea。`,
     ]);
+    completeLlmProgress("idea", `已生成 ${ideas.length} 个 idea，并写入输入框。`);
   } catch (error) {
     renderNotices([`自动脑洞失败：${error.message}`]);
     if (ideaStatus) {
       ideaStatus.textContent = "自动脑洞失败，仍可手动填写 idea。";
     }
+    completeLlmProgress("idea", "自动脑洞失败，请检查错误提示或 API 配置。", "error");
   } finally {
     setIdeaBusy(false);
     updateReviewSummary();
@@ -1353,6 +1466,7 @@ controls.taskIdeas.addEventListener("input", () => {
   updateReviewSummary();
   updateNav();
 });
+controls.taskIdeas.addEventListener("scroll", syncIdeaLineMarkers);
 controls.ideaPlanCount.addEventListener("input", () => {
   updateNav();
 });

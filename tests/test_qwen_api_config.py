@@ -179,10 +179,36 @@ class QwenApiConfigTest(unittest.TestCase):
         self.assertIn("handleWorkbookDrop", js)
         self.assertIn("uploadWorkbookFile", js)
 
+    def test_task_idea_editor_has_visible_line_markers(self):
+        root = Path(__file__).resolve().parents[1]
+        html = (root / "static" / "index.html").read_text(encoding="utf-8")
+        js = (root / "static" / "app.js").read_text(encoding="utf-8")
+        css = (root / "static" / "styles.css").read_text(encoding="utf-8")
+
+        self.assertIn("idea-editor", html)
+        self.assertIn("taskIdeaGutter", html)
+        self.assertIn("syncIdeaLineMarkers", js)
+        self.assertIn("idea-line-gutter", css)
+        self.assertIn("idea-row-marker", css)
+
+    def test_llm_calls_show_visual_progress(self):
+        root = Path(__file__).resolve().parents[1]
+        html = (root / "static" / "index.html").read_text(encoding="utf-8")
+        js = (root / "static" / "app.js").read_text(encoding="utf-8")
+        css = (root / "static" / "styles.css").read_text(encoding="utf-8")
+
+        self.assertIn("ideaProgress", html)
+        self.assertIn("generationProgress", html)
+        self.assertIn("startLlmProgress", js)
+        self.assertIn("completeLlmProgress", js)
+        self.assertIn("llm-progress", css)
+        self.assertIn("progress-step", css)
+
     def test_static_ui_exposes_avatar_picker_and_clear_capability_states(self):
         root = Path(__file__).resolve().parents[1]
         html = (root / "static" / "index.html").read_text(encoding="utf-8")
         js = (root / "static" / "app.js").read_text(encoding="utf-8")
+        css = (root / "static" / "styles.css").read_text(encoding="utf-8")
 
         self.assertIn("avatarPanel", html)
         self.assertIn("avatarPickerBtn", html)
@@ -197,6 +223,8 @@ class QwenApiConfigTest(unittest.TestCase):
         self.assertIn("不具备移动能力", js)
         self.assertIn("具备全身能力", js)
         self.assertIn("不具备全身能力", js)
+        self.assertNotIn('content: "当前：";', css)
+        self.assertIn('content: "✓";', css)
 
 
 if __name__ == "__main__":
