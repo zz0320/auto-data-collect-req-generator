@@ -17,13 +17,20 @@
 - 预训练目标次数固定为 `60`，后训练固定为 `600`。
 - 自动脑洞和需求生成都会参考 RAG 历史数据，并在本地做重复和能力边界校验。
 
+## 工作流
+
+- `首页`: 查看准备度、idea 数、结果数和三段流程状态。
+- `准备`: 集中配置 DashScope API、导入 RAG Excel、维护机器人能力。
+- `生成`: 选择阶段、自动脑洞、编辑 idea、生成需求。
+- `结果`: 编辑生成结果、查看拒绝原因、导出并分享 Excel。
+
 ## 打开和运行
 
 ```bash
 open ios/ReqWorkshop/ReqWorkshop.xcodeproj
 ```
 
-在 Xcode 中选择 `ReqWorkshop` scheme，选择 iOS Simulator，运行即可。首次使用需要在 App 的设置页填写 DashScope API Key、模型和 endpoint。
+在 Xcode 中选择 `ReqWorkshop` scheme，选择 iOS Simulator，运行即可。首次使用需要在 App 的 `准备` 页填写 DashScope API Key、模型和 endpoint。
 
 默认 endpoint:
 
@@ -36,8 +43,8 @@ https://dashscope.aliyuncs.com/api/v1/services/aigc/text-generation/generation
 可用 simulator 名称取决于本机 Xcode。当前验证使用的是 `iPhone 17` simulator；如果本机有 `iPhone 16`，也可以按计划命令替换 destination。
 
 ```bash
-xcodebuild build -project ios/ReqWorkshop/ReqWorkshop.xcodeproj -scheme ReqWorkshop -destination 'platform=iOS Simulator,name=iPhone 17'
-xcodebuild test -project ios/ReqWorkshop/ReqWorkshop.xcodeproj -scheme ReqWorkshop -destination 'platform=iOS Simulator,name=iPhone 17'
+xcodebuild build -project ios/ReqWorkshop/ReqWorkshop.xcodeproj -scheme ReqWorkshop -destination 'platform=iOS Simulator,name=iPhone 17' CODE_SIGNING_ALLOWED=NO
+xcodebuild test -project ios/ReqWorkshop/ReqWorkshop.xcodeproj -scheme ReqWorkshop -destination 'platform=iOS Simulator,name=iPhone 17' CODE_SIGNING_ALLOWED=NO
 cd ios/ReqWorkshop/ReqWorkshopCore && swift test
 ```
 
