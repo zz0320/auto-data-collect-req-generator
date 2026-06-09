@@ -30,7 +30,7 @@ struct ContentView: View {
         .preferredColorScheme(.light)
         .tint(WorkshopStyle.ink)
         .foregroundStyle(WorkshopStyle.ink)
-        .font(WorkshopStyle.mono(.body))
+        .font(WorkshopStyle.mono(.callout))
         .overlay(alignment: .bottom) {
             if !model.notice.isEmpty {
                 PixelToast(text: model.notice)
@@ -138,7 +138,7 @@ private struct HomeView: View {
                         .pixelFrame(lineWidth: 3, shadow: 4)
                     VStack(alignment: .leading, spacing: 6) {
                         Text("需求生成工坊")
-                            .font(WorkshopStyle.mono(.title2, weight: .black))
+                            .font(WorkshopStyle.mono(.headline, weight: .black))
                     }
                 }
 
@@ -508,7 +508,24 @@ private enum WorkshopStyle {
     static let twoColumns = [GridItem(.adaptive(minimum: 145), spacing: 10)]
 
     static func mono(_ style: Font.TextStyle, weight: Font.Weight = .regular) -> Font {
-        .system(style, design: .monospaced).weight(weight)
+        .system(size: fontSize(for: style), weight: weight, design: .monospaced)
+    }
+
+    private static func fontSize(for style: Font.TextStyle) -> CGFloat {
+        switch style {
+        case .largeTitle: 26
+        case .title: 22
+        case .title2: 19
+        case .title3: 16
+        case .headline: 15
+        case .subheadline: 13
+        case .body: 14
+        case .callout: 13
+        case .footnote: 12
+        case .caption: 11
+        case .caption2: 10
+        @unknown default: 13
+        }
     }
 }
 
@@ -556,7 +573,7 @@ private struct WorkshopScreen<Content: View>: View {
                 VStack(alignment: .leading, spacing: 18) {
                     VStack(alignment: .leading, spacing: 5) {
                         Text(title)
-                            .font(WorkshopStyle.mono(.largeTitle, weight: .black))
+                            .font(WorkshopStyle.mono(.title, weight: .black))
                         if let subtitle {
                             Text(subtitle)
                                 .font(WorkshopStyle.mono(.footnote, weight: .bold))
