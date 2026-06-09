@@ -30,6 +30,34 @@ final class RAGAndExportTests: XCTestCase {
         XCTAssertEqual(docs[0].device, "乐聚KUAVO")
     }
 
+    func testRAGStoreInfersRobotProfilesFromImportedRows() throws {
+        let table = [
+            ["任务名称", "任务步骤描述", "采集设备", "采集模式", "场景域分类", "目标次数", "机器及环境参数", "任务级别", "任务步骤数量"],
+            [
+                "货架巡检取放",
+                "1. 导航到货架 <Navigate（导航）><8s>\n2. 抓取商品 <Grasp（抓取）><8s>",
+                "傅利叶GR-2",
+                "双臂",
+                "商超药店",
+                "60",
+                "末端执行器：灵巧手；具备移动能力；具备全身能力",
+                "中等",
+                "2",
+            ],
+        ]
+        let store = RAGStore(documents: RAGStore.documents(from: table))
+
+        let profile = try XCTUnwrap(store.inferredRobotProfiles().first)
+
+        XCTAssertEqual(profile.brand, "傅利叶")
+        XCTAssertEqual(profile.model, "GR-2")
+        XCTAssertEqual(profile.endEffector, "灵巧手")
+        XCTAssertEqual(profile.arms, .dual)
+        XCTAssertTrue(profile.mobile)
+        XCTAssertTrue(profile.wholeBody)
+        XCTAssertTrue(profile.notes.contains("RAG 1 条"))
+    }
+
     func testExportWritesThreeReadableXLSXSheets() throws {
         let robot = RobotProfile.fixture()
         let row = RequirementRow.fixture(taskName: "预-遥控器电池盖扣合", robot: robot)

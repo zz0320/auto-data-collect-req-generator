@@ -88,6 +88,7 @@ public struct GenerationEngine {
                 "采集设备": doc.device,
                 "采集模式": doc.mode,
                 "场景域分类": doc.category,
+                "机器及环境参数": doc.machineParameters,
                 "动作标签": doc.actions,
                 "任务步骤描述": String(doc.steps.prefix(320)),
             ] as [String: Any]
@@ -163,6 +164,7 @@ public struct GenerationEngine {
                     "任务级别": doc.level,
                     "目标次数": doc.targetTimes,
                     "任务步骤数量": doc.stepCount,
+                    "机器及环境参数": doc.machineParameters,
                     "动作标签": doc.actions,
                     "任务步骤描述": String(doc.steps.prefix(360)),
                 ] as [String: Any]
@@ -220,7 +222,7 @@ public struct GenerationEngine {
                 category: doc.category,
                 steps: doc.steps,
                 targetTimes: Int(doc.targetTimes) ?? phase.targetTimes,
-                machineParameters: "",
+                machineParameters: doc.machineParameters,
                 level: doc.level,
                 stepCount: Int(doc.stepCount) ?? TextUtilities.lineCount(from: doc.steps)
             )

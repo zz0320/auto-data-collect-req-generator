@@ -247,6 +247,10 @@ private struct RAGConfigPanel: View {
             if !model.ragStore.summary.topDevices.isEmpty {
                 InfoStrip(title: "常见设备", value: model.ragStore.summary.topDevices.map(\.name).joined(separator: "、"))
             }
+            if !model.ragRobotSuggestions.isEmpty {
+                InfoStrip(title: "机器人画像", value: robotSuggestionSummary(model.ragRobotSuggestions))
+                PixelButton(title: "同步机器人", systemImage: "arrow.triangle.2.circlepath", tone: .secondary, action: model.syncRobotsFromRAG)
+            }
             if model.ragStore.documents.isEmpty {
                 PixelEmpty(text: "还没有导入 RAG Excel")
             } else {
@@ -262,6 +266,15 @@ private struct RAGConfigPanel: View {
             }
         }
     }
+
+    private func robotSuggestionSummary(_ robots: [RobotProfile]) -> String {
+        robots.map { robot in
+            let motion = robot.mobile ? "移动" : "固定"
+            let body = robot.wholeBody ? "全身" : "非全身"
+            return "\(robot.name) · \(robot.arms.rawValue) · \(robot.endEffector) · \(motion) · \(body)"
+        }
+        .joined(separator: "\n")
+    }
 }
 
 private struct RobotConfigPanel: View {
@@ -275,6 +288,9 @@ private struct RobotConfigPanel: View {
                 PixelButton(title: "新增", systemImage: "plus", tone: .secondary, action: model.addRobot)
             }
         ) {
+            if !model.ragStore.documents.isEmpty {
+                InfoStrip(title: "RAG", value: "已按导入文档归纳机器人；可手动微调。")
+            }
             ForEach($model.robots) { $robot in
                 PixelCard {
                     HStack {

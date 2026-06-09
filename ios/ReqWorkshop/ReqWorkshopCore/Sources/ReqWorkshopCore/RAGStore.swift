@@ -11,6 +11,7 @@ public struct RAGDocument: Identifiable, Codable, Equatable, Sendable {
     public var category: String
     public var steps: String
     public var targetTimes: String
+    public var machineParameters: String
     public var level: String
     public var stepCount: String
     public var actions: [String]
@@ -26,6 +27,7 @@ public struct RAGDocument: Identifiable, Codable, Equatable, Sendable {
         category: String,
         steps: String,
         targetTimes: String,
+        machineParameters: String = "",
         level: String,
         stepCount: String,
         actions: [String]? = nil
@@ -39,6 +41,7 @@ public struct RAGDocument: Identifiable, Codable, Equatable, Sendable {
         self.category = category
         self.steps = steps
         self.targetTimes = targetTimes
+        self.machineParameters = machineParameters
         self.level = level
         self.stepCount = stepCount
         self.actions = actions ?? TextUtilities.actionKeys(from: steps)
@@ -49,6 +52,7 @@ public struct RAGDocument: Identifiable, Codable, Equatable, Sendable {
             mode,
             category,
             steps,
+            machineParameters,
             self.actions.joined(separator: " "),
             self.actions.compactMap { ReqConstants.canonicalActions[$0] }.joined(separator: " ")
         )
@@ -117,6 +121,34 @@ public struct RAGStore: Codable, Sendable {
         return RAGSummary(rows: documents.count, ragDocumentCount: documents.count, topDevices: devices, topCategories: categories)
     }
 
+    public func inferredRobotProfiles(limit: Int = 6) -> [RobotProfile] {
+        guard limit > 0 else { return [] }
+        let groups = Dictionary(grouping: documents.filter { !$0.device.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }) {
+            TextUtilities.normalizeDuplicateText($0.device)
+        }
+        return groups.values
+            .sorted { lhs, rhs in
+                if lhs.count == rhs.count {
+                    return (lhs.first?.device ?? "") < (rhs.first?.device ?? "")
+                }
+                return lhs.count > rhs.count
+            }
+            .prefix(limit)
+            .compactMap { docs in
+                guard let device = topCounts(docs.map(\.device), limit: 1).first?.0 else { return nil }
+                let name = Self.splitDeviceName(device)
+                return RobotProfile(
+                    brand: name.brand,
+                    model: name.model,
+                    endEffector: Self.inferEndEffector(from: docs),
+                    arms: Self.inferArmMode(from: docs),
+                    mobile: Self.inferMobile(from: docs),
+                    wholeBody: Self.inferWholeBody(from: docs),
+                    notes: Self.inferNotes(from: docs)
+                )
+            }
+    }
+
     public func retrieveExamples(idea: String, robots: [RobotProfile], limit: Int) -> [RAGDocument] {
         guard limit > 0 else { return [] }
         let ideaTokens = TextUtilities.tokens(idea)
@@ -130,7 +162,7 @@ public struct RAGStore: Codable, Sendable {
             let overlap = queryTokens.intersection(doc.tokens)
             let ideaOverlap = ideaTokens.intersection(doc.tokens)
             var score = Double(overlap.count) + Double(ideaOverlap.count) * 3
-            let docText = [doc.taskName, doc.brief, doc.device, doc.mode, doc.category, doc.steps].joined(separator: " ")
+            let docText = [doc.taskName, doc.brief, doc.device, doc.mode, doc.category, doc.steps, doc.machineParameters].joined(separator: " ")
             if !idea.isEmpty, docText.contains(idea) { score += 8 }
             if robotNames.contains(doc.device) {
                 score += ideaOverlap.isEmpty ? 0.7 : 2
@@ -175,6 +207,7 @@ public struct RAGStore: Codable, Sendable {
                 "常见采集模式": topCounts(matched.map(\.mode), limit: 5).map { ["name": $0.0, "count": $0.1] },
                 "常见场景": topCounts(matched.map(\.category), limit: 5).map { ["name": $0.0, "count": $0.1] },
                 "观察到动作": topCounts(matched.flatMap(\.actions), limit: 12).map { ["name": ReqConstants.canonicalActions[$0.0] ?? $0.0, "count": $0.1] },
+                "历史机器参数样例": Array(matched.map(\.machineParameters).filter { !$0.isEmpty }.uniqued().prefix(5)),
                 "历史任务名样例": Array(matched.map(\.taskName).uniqued().prefix(12)),
             ]
         }
@@ -223,6 +256,7 @@ public struct RAGStore: Codable, Sendable {
                 category: value(row, "场景域分类"),
                 steps: steps,
                 targetTimes: value(row, "目标次数"),
+                machineParameters: value(row, "机器及环境参数"),
                 level: value(row, "任务级别"),
                 stepCount: value(row, "任务步骤数量")
             )
@@ -256,6 +290,73 @@ public struct RAGStore: Codable, Sendable {
             }
         }
         return values
+    }
+
+    private static func splitDeviceName(_ value: String) -> (brand: String, model: String) {
+        let cleaned = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        let knownBrands = ["星尘智能", "银河通用", "优必选", "傅利叶", "乐聚", "天机", "遨博", "智元", "宇树", "越疆", "节卡"]
+            .sorted { $0.count > $1.count }
+        if let brand = knownBrands.first(where: { cleaned.contains($0) }) {
+            let model = cleaned.replacingOccurrences(of: brand, with: "")
+                .trimmingCharacters(in: CharacterSet.whitespacesAndNewlines.union(.punctuationCharacters))
+            return (brand, model.isEmpty ? cleaned : model)
+        }
+        if let match = cleaned.firstMatch(pattern: #"^([\u{4e00}-\u{9fff}]{2,})([A-Za-z0-9].*)$"#), match.count == 3 {
+            return (match[1], match[2].trimmingCharacters(in: .whitespacesAndNewlines))
+        }
+        return ("", cleaned)
+    }
+
+    private static func inferArmMode(from docs: [RAGDocument]) -> ArmMode {
+        let modes = docs.map(\.mode)
+        if let topMode = topCounts(modes, limit: 1).first?.0 {
+            if topMode.contains("单臂"), topMode.contains("左") { return .singleLeft }
+            if topMode.contains("单臂") { return .singleRight }
+            if topMode.contains("双") { return .dual }
+        }
+        return .dual
+    }
+
+    private static func inferMobile(from docs: [RAGDocument]) -> Bool {
+        let actions = Set(docs.flatMap(\.actions))
+        if !actions.intersection(ReqConstants.mobileActions).isEmpty { return true }
+        let text = capabilityText(from: docs)
+        if text.range(of: #"不具备移动|无移动|固定工位|不能移动"#, options: .regularExpression) != nil { return false }
+        return text.range(of: #"具备移动|移动底盘|导航|巡检|跨房间|搬运|货架往返"#, options: .regularExpression) != nil
+    }
+
+    private static func inferWholeBody(from docs: [RAGDocument]) -> Bool {
+        let actions = Set(docs.flatMap(\.actions))
+        if !actions.intersection(ReqConstants.wholeBodyActions).isEmpty { return true }
+        let text = capabilityText(from: docs)
+        if text.range(of: #"不具备全身|无全身|不假设全身"#, options: .regularExpression) != nil { return false }
+        return text.range(of: #"具备全身|全身能力|蹲下|伸展|升降"#, options: .regularExpression) != nil
+    }
+
+    private static func inferEndEffector(from docs: [RAGDocument]) -> String {
+        let text = capabilityText(from: docs)
+        if text.contains("灵巧手") { return "灵巧手" }
+        if text.contains("吸盘") { return "吸盘" }
+        if text.contains("二指") { return "二指夹爪" }
+        let actions = Set(docs.flatMap(\.actions))
+        if !actions.intersection(ReqConstants.fineActions).isEmpty { return "灵巧手" }
+        if text.contains("夹爪") || text.contains("夹具") || text.contains("爪") { return "夹爪" }
+        return "夹爪"
+    }
+
+    private static func inferNotes(from docs: [RAGDocument]) -> String {
+        let categories = topCounts(docs.map(\.category), limit: 4).map(\.0).joined(separator: "、")
+        let actions = topCounts(docs.flatMap(\.actions), limit: 8)
+            .map { ReqConstants.canonicalActions[$0.0] ?? $0.0 }
+            .joined(separator: "、")
+        let scenes = categories.isEmpty ? "未识别" : categories
+        let observedActions = actions.isEmpty ? "未识别" : actions
+        return "从 RAG \(docs.count) 条历史需求自动归纳；常见场景：\(scenes)；观察动作：\(observedActions)"
+    }
+
+    private static func capabilityText(from docs: [RAGDocument]) -> String {
+        docs.map { [$0.device, $0.mode, $0.category, $0.brief, $0.steps, $0.machineParameters].joined(separator: " ") }
+            .joined(separator: " ")
     }
 }
 

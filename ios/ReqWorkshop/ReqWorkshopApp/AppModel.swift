@@ -44,6 +44,10 @@ final class AppModel {
         validations.filter { $0.status == .rejected }.count
     }
 
+    var ragRobotSuggestions: [RobotProfile] {
+        ragStore.inferredRobotProfiles(limit: 6)
+    }
+
     func refreshAPIKeyState() {
         apiKeyConfigured = ((try? KeychainStore.loadAPIKey()) ?? "").isEmpty == false
     }
@@ -86,11 +90,22 @@ final class AppModel {
             ragStore = try RAGStore(xlsxURL: url)
             ragFileName = url.lastPathComponent
             validations = []
-            notice = "RAG 已导入：\(ragStore.documents.count) 条历史需求。"
+            let syncedCount = applyRobotsFromRAG()
+            notice = syncedCount > 0
+                ? "RAG 已导入：\(ragStore.documents.count) 条历史需求，已同步 \(syncedCount) 台机器人。"
+                : "RAG 已导入：\(ragStore.documents.count) 条历史需求，未识别到机器人配置。"
             saveSettings()
         } catch {
             notice = "RAG 导入失败：\(error.localizedDescription)"
         }
+    }
+
+    func syncRobotsFromRAG() {
+        let syncedCount = applyRobotsFromRAG()
+        notice = syncedCount > 0
+            ? "已从 RAG 重新同步 \(syncedCount) 台机器人。"
+            : "当前 RAG 没有可同步的机器人画像。"
+        saveSettings()
     }
 
 	@MainActor
@@ -132,6 +147,15 @@ final class AppModel {
     func removeRobots(at offsets: IndexSet) {
         robots.remove(atOffsets: offsets)
         if robots.isEmpty { addRobot() }
+    }
+
+    @discardableResult
+    private func applyRobotsFromRAG() -> Int {
+        let suggested = ragRobotSuggestions
+        guard !suggested.isEmpty else { return 0 }
+        robots = suggested
+        validations = []
+        return suggested.count
     }
 
     func saveSettings() {
