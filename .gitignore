@@ -3,3 +3,9 @@
 __pycache__/
 outputs/
 work/
+ios/ReqWorkshop/DerivedData*/
+ios/ReqWorkshop/ReqWorkshopCore/.build/
+ios/ReqWorkshop/ReqWorkshopCore/.swiftpm/
+ios/ReqWorkshop/*.xcuserdata/
+ios/ReqWorkshop/ReqWorkshop.xcodeproj/xcuserdata/
+*.xcuserstate
