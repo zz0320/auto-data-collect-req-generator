@@ -86,6 +86,16 @@ public struct RAGSummary: Codable, Equatable, Sendable {
     public var topCategories: [CountItem]
 }
 
+public struct RobotPreset: Identifiable, Codable, Equatable, Sendable {
+    public var id: String { name }
+    public var name: String
+    public var profile: RobotProfile
+    public var count: Int
+    public var categories: [String]
+    public var actions: [String]
+    public var modes: [String]
+}
+
 public struct RAGStore: Codable, Sendable {
     public private(set) var documents: [RAGDocument]
 
@@ -122,6 +132,10 @@ public struct RAGStore: Codable, Sendable {
     }
 
     public func inferredRobotProfiles(limit: Int = 6) -> [RobotProfile] {
+        inferredRobotPresets(limit: limit).map(\.profile)
+    }
+
+    public func inferredRobotPresets(limit: Int = 6) -> [RobotPreset] {
         guard limit > 0 else { return [] }
         let groups = Dictionary(grouping: documents.filter { !$0.device.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }) {
             TextUtilities.normalizeDuplicateText($0.device)
@@ -137,7 +151,7 @@ public struct RAGStore: Codable, Sendable {
             .compactMap { docs in
                 guard let device = topCounts(docs.map(\.device), limit: 1).first?.0 else { return nil }
                 let name = Self.splitDeviceName(device)
-                return RobotProfile(
+                let profile = RobotProfile(
                     brand: name.brand,
                     model: name.model,
                     endEffector: Self.inferEndEffector(from: docs),
@@ -145,6 +159,14 @@ public struct RAGStore: Codable, Sendable {
                     mobile: Self.inferMobile(from: docs),
                     wholeBody: Self.inferWholeBody(from: docs),
                     notes: Self.inferNotes(from: docs)
+                )
+                return RobotPreset(
+                    name: device,
+                    profile: profile,
+                    count: docs.count,
+                    categories: topCounts(docs.map(\.category), limit: 3).map(\.0),
+                    actions: topCounts(docs.flatMap(\.actions), limit: 5).map { ReqConstants.canonicalActions[$0.0] ?? $0.0 },
+                    modes: topCounts(docs.map(\.mode), limit: 3).map(\.0)
                 )
             }
     }

@@ -21,6 +21,7 @@ final class AppModel {
     var exportedURL: URL?
     var notice = ""
     var isBusy = false
+    var hapticEvent = HapticEvent()
 
     let modelOptions = ["qwen3.7-max", "qwen3-max", "qwen-plus", "qwen-turbo"]
 
@@ -44,8 +45,12 @@ final class AppModel {
         validations.filter { $0.status == .rejected }.count
     }
 
+    var ragRobotPresets: [RobotPreset] {
+        ragStore.inferredRobotPresets(limit: 6)
+    }
+
     var ragRobotSuggestions: [RobotProfile] {
-        ragStore.inferredRobotProfiles(limit: 6)
+        ragRobotPresets.map(\.profile)
     }
 
     func refreshAPIKeyState() {
@@ -90,21 +95,41 @@ final class AppModel {
             ragStore = try RAGStore(xlsxURL: url)
             ragFileName = url.lastPathComponent
             validations = []
-            let syncedCount = applyRobotsFromRAG()
-            notice = syncedCount > 0
-                ? "RAG 已导入：\(ragStore.documents.count) 条历史需求，已同步 \(syncedCount) 台机器人。"
-                : "RAG 已导入：\(ragStore.documents.count) 条历史需求，未识别到机器人配置。"
+            let presetCount = ragRobotPresets.count
+            notice = presetCount > 0
+                ? "RAG 已导入：\(ragStore.documents.count) 条历史需求，识别 \(presetCount) 个候选机型。"
+                : "RAG 已导入：\(ragStore.documents.count) 条历史需求，未识别到候选机型。"
+            triggerHaptic(presetCount > 0 ? .success : .warning)
             saveSettings()
         } catch {
             notice = "RAG 导入失败：\(error.localizedDescription)"
+            triggerHaptic(.error)
         }
     }
 
     func syncRobotsFromRAG() {
-        let syncedCount = applyRobotsFromRAG()
+        let syncedCount = replaceRobotsFromRAG()
         notice = syncedCount > 0
             ? "已从 RAG 重新同步 \(syncedCount) 台机器人。"
             : "当前 RAG 没有可同步的机器人画像。"
+        triggerHaptic(syncedCount > 0 ? .success : .warning)
+        saveSettings()
+    }
+
+    func selectRobotPreset(_ preset: RobotPreset) {
+        if isRobotSelected(preset.profile) {
+            notice = "已选择过：\(preset.name)。"
+            triggerHaptic(.warning)
+            return
+        }
+        if shouldReplaceStarterRobot {
+            robots = [preset.profile]
+        } else {
+            robots.append(preset.profile)
+        }
+        validations = []
+        notice = "已选择机型：\(preset.name)，可继续确认能力。"
+        triggerHaptic(.selection)
         saveSettings()
     }
 
@@ -142,6 +167,7 @@ final class AppModel {
 
     func addRobot() {
         robots.append(RobotProfile(brand: "", model: "", endEffector: "夹爪", arms: .dual, mobile: false, wholeBody: false, notes: ""))
+        triggerHaptic(.impact)
     }
 
     func removeRobots(at offsets: IndexSet) {
@@ -150,12 +176,33 @@ final class AppModel {
     }
 
     @discardableResult
-    private func applyRobotsFromRAG() -> Int {
+    private func replaceRobotsFromRAG() -> Int {
         let suggested = ragRobotSuggestions
         guard !suggested.isEmpty else { return 0 }
         robots = suggested
         validations = []
         return suggested.count
+    }
+
+    func isRobotSelected(_ robot: RobotProfile) -> Bool {
+        robots.contains { selected in
+            normalizedRobotName(selected) == normalizedRobotName(robot)
+        }
+    }
+
+    private var shouldReplaceStarterRobot: Bool {
+        guard robots.count == 1, let robot = robots.first else { return false }
+        return robot.brand == "乐聚"
+            && robot.model == "KUAVO"
+            && robot.endEffector == "夹爪"
+            && robot.arms == .dual
+            && robot.mobile == false
+            && robot.wholeBody == false
+            && robot.notes.isEmpty
+    }
+
+    private func normalizedRobotName(_ robot: RobotProfile) -> String {
+        robot.name.lowercased().filter { $0.isLetter || $0.isNumber }
     }
 
     func saveSettings() {
@@ -192,11 +239,17 @@ final class AppModel {
         do {
             try await operation()
             if notice.isEmpty { notice = fallbackSuccess }
+            triggerHaptic(.success)
             saveSettings()
         } catch {
             notice = error.localizedDescription
+            triggerHaptic(.error)
         }
         isBusy = false
+    }
+
+    func triggerHaptic(_ kind: HapticKind) {
+        hapticEvent = HapticEvent(id: hapticEvent.id + 1, kind: kind)
     }
 }
 
@@ -208,4 +261,17 @@ private struct LocalSettings: Codable {
     var phase: TaskPhase
     var ideasText: String
     var owner: String
+}
+
+enum HapticKind: Equatable {
+    case impact
+    case selection
+    case success
+    case warning
+    case error
+}
+
+struct HapticEvent: Equatable {
+    var id = 0
+    var kind: HapticKind = .impact
 }

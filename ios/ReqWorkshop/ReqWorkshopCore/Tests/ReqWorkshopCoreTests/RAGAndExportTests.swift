@@ -58,6 +58,46 @@ final class RAGAndExportTests: XCTestCase {
         XCTAssertTrue(profile.notes.contains("RAG 1 条"))
     }
 
+    func testRAGStoreBuildsSelectableRobotPresetsWithMetadata() throws {
+        let table = [
+            ["任务名称", "任务步骤描述", "采集设备", "采集模式", "场景域分类", "目标次数", "机器及环境参数", "任务级别", "任务步骤数量"],
+            [
+                "货架巡检取放",
+                "1. 导航到货架 <Navigate（导航）><8s>\n2. 抓取商品 <Grasp（抓取）><8s>",
+                "傅利叶GR-2",
+                "双臂",
+                "商超药店",
+                "60",
+                "末端执行器：灵巧手；具备移动能力",
+                "中等",
+                "2",
+            ],
+            [
+                "商品递送",
+                "1. 拿起商品 <Pick（拿起）><8s>\n2. 递送商品 <HandOver（传递）><8s>",
+                "傅利叶GR-2",
+                "双臂",
+                "商超药店",
+                "60",
+                "末端执行器：灵巧手；具备移动能力",
+                "中等",
+                "2",
+            ],
+        ]
+        let store = RAGStore(documents: RAGStore.documents(from: table))
+
+        let preset = try XCTUnwrap(store.inferredRobotPresets().first)
+
+        XCTAssertEqual(preset.name, "傅利叶GR-2")
+        XCTAssertEqual(preset.count, 2)
+        XCTAssertEqual(preset.profile.endEffector, "灵巧手")
+        XCTAssertTrue(preset.profile.mobile)
+        XCTAssertEqual(preset.categories, ["商超药店"])
+        XCTAssertTrue(preset.actions.contains("Navigate（导航）"))
+        XCTAssertTrue(preset.actions.contains("HandOver（传递）"))
+        XCTAssertEqual(preset.modes, ["双臂"])
+    }
+
     func testExportWritesThreeReadableXLSXSheets() throws {
         let robot = RobotProfile.fixture()
         let row = RequirementRow.fixture(taskName: "预-遥控器电池盖扣合", robot: robot)

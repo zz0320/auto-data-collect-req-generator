@@ -31,6 +31,20 @@ struct ContentView: View {
         .tint(WorkshopStyle.ink)
         .foregroundStyle(WorkshopStyle.ink)
         .font(WorkshopStyle.mono(.callout))
+        .sensoryFeedback(trigger: model.hapticEvent) {
+            switch model.hapticEvent.kind {
+            case .impact:
+                .impact(weight: .light, intensity: 0.55)
+            case .selection:
+                .selection
+            case .success:
+                .success
+            case .warning:
+                .warning
+            case .error:
+                .error
+            }
+        }
         .overlay(alignment: .bottom) {
             if !model.notice.isEmpty {
                 PixelToast(text: model.notice)
@@ -247,9 +261,9 @@ private struct RAGConfigPanel: View {
             if !model.ragStore.summary.topDevices.isEmpty {
                 InfoStrip(title: "常见设备", value: model.ragStore.summary.topDevices.map(\.name).joined(separator: "、"))
             }
-            if !model.ragRobotSuggestions.isEmpty {
-                InfoStrip(title: "机器人画像", value: robotSuggestionSummary(model.ragRobotSuggestions))
-                PixelButton(title: "同步机器人", systemImage: "arrow.triangle.2.circlepath", tone: .secondary, action: model.syncRobotsFromRAG)
+            if !model.ragRobotPresets.isEmpty {
+                InfoStrip(title: "候选机型", value: model.ragRobotPresets.map(\.name).joined(separator: "、"))
+                PixelButton(title: "同步全部", systemImage: "arrow.triangle.2.circlepath", tone: .secondary, action: model.syncRobotsFromRAG)
             }
             if model.ragStore.documents.isEmpty {
                 PixelEmpty(text: "还没有导入 RAG Excel")
@@ -267,14 +281,6 @@ private struct RAGConfigPanel: View {
         }
     }
 
-    private func robotSuggestionSummary(_ robots: [RobotProfile]) -> String {
-        robots.map { robot in
-            let motion = robot.mobile ? "移动" : "固定"
-            let body = robot.wholeBody ? "全身" : "非全身"
-            return "\(robot.name) · \(robot.arms.rawValue) · \(robot.endEffector) · \(motion) · \(body)"
-        }
-        .joined(separator: "\n")
-    }
 }
 
 private struct RobotConfigPanel: View {
@@ -289,7 +295,19 @@ private struct RobotConfigPanel: View {
             }
         ) {
             if !model.ragStore.documents.isEmpty {
-                InfoStrip(title: "RAG", value: "已按导入文档归纳机器人；可手动微调。")
+                InfoStrip(title: "RAG", value: "先选择候选机型，再确认能力。")
+            }
+            if !model.ragRobotPresets.isEmpty {
+                LazyVGrid(columns: WorkshopStyle.twoColumns, spacing: 10) {
+                    ForEach(model.ragRobotPresets) { preset in
+                        RobotPresetCard(
+                            preset: preset,
+                            selected: model.isRobotSelected(preset.profile)
+                        ) {
+                            model.selectRobotPreset(preset)
+                        }
+                    }
+                }
             }
             ForEach($model.robots) { $robot in
                 PixelCard {
@@ -347,6 +365,60 @@ private struct RobotConfigPanel: View {
                 }
             }
         }
+    }
+}
+
+private struct RobotPresetCard: View {
+    let preset: RobotPreset
+    let selected: Bool
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            PixelCard(background: selected ? WorkshopStyle.mint : WorkshopStyle.paper) {
+                HStack(alignment: .top, spacing: 8) {
+                    Text(preset.name)
+                        .font(WorkshopStyle.mono(.subheadline, weight: .black))
+                        .lineLimit(2)
+                    Spacer(minLength: 0)
+                    Text(selected ? "已选" : "选择")
+                        .font(WorkshopStyle.mono(.caption2, weight: .black))
+                        .padding(.horizontal, 7)
+                        .padding(.vertical, 5)
+                        .background(selected ? WorkshopStyle.green : WorkshopStyle.yellow)
+                        .foregroundStyle(selected ? WorkshopStyle.paper : WorkshopStyle.ink)
+                        .overlay(Rectangle().stroke(WorkshopStyle.line, lineWidth: 2))
+                }
+                Text("存量 \(preset.count) 条 · \(preset.categories.prefix(2).joined(separator: "、").emptyFallback("未归类"))")
+                    .font(WorkshopStyle.mono(.caption, weight: .bold))
+                    .foregroundStyle(WorkshopStyle.muted)
+                HStack(spacing: 6) {
+                    PresetTag(text: preset.modes.prefix(2).joined(separator: "、").emptyFallback(preset.profile.arms.rawValue))
+                    PresetTag(text: preset.profile.endEffector)
+                }
+                HStack(spacing: 6) {
+                    PresetTag(text: preset.profile.mobile ? "可移动" : "固定工位")
+                    PresetTag(text: preset.profile.wholeBody ? "全身" : "非全身")
+                }
+            }
+        }
+        .buttonStyle(.plain)
+        .disabled(selected)
+    }
+}
+
+private struct PresetTag: View {
+    let text: String
+
+    var body: some View {
+        Text(text)
+            .font(WorkshopStyle.mono(.caption2, weight: .black))
+            .lineLimit(1)
+            .minimumScaleFactor(0.7)
+            .padding(.horizontal, 6)
+            .padding(.vertical, 4)
+            .background(WorkshopStyle.yellow.opacity(0.72))
+            .overlay(Rectangle().stroke(WorkshopStyle.line, lineWidth: 1.5))
     }
 }
 
@@ -611,11 +683,13 @@ private struct WorkshopScreen<Content: View>: View {
 
 private struct PixelTabBar: View {
     @Binding var selectedTab: WorkshopTab
+    @State private var hapticTrigger = 0
 
     var body: some View {
         HStack(spacing: 0) {
             ForEach(WorkshopTab.allCases, id: \.self) { tab in
                 Button {
+                    hapticTrigger += 1
                     selectedTab = tab
                 } label: {
                     VStack(spacing: 4) {
@@ -639,6 +713,7 @@ private struct PixelTabBar: View {
                 .buttonStyle(.plain)
             }
         }
+        .sensoryFeedback(.selection, trigger: hapticTrigger)
         .overlay(Rectangle().stroke(WorkshopStyle.line, lineWidth: 3))
         .background(Rectangle().fill(WorkshopStyle.line).offset(x: 5, y: 5))
         .padding(.trailing, 5)
@@ -672,6 +747,7 @@ private struct WorkflowStepButton: View {
     let isSelected: Bool
     let isDone: Bool
     let action: () -> Void
+    @State private var hapticTrigger = 0
 
     private var fill: Color {
         if isSelected { return WorkshopStyle.mint }
@@ -684,7 +760,10 @@ private struct WorkflowStepButton: View {
     }
 
     var body: some View {
-        Button(action: action) {
+        Button {
+            hapticTrigger += 1
+            action()
+        } label: {
             VStack(alignment: .leading, spacing: 7) {
                 HStack(spacing: 6) {
                     Text(step.number)
@@ -719,6 +798,7 @@ private struct WorkflowStepButton: View {
             .padding(.bottom, 4)
         }
         .buttonStyle(.plain)
+        .sensoryFeedback(.selection, trigger: hapticTrigger)
     }
 }
 
@@ -1001,12 +1081,17 @@ private struct PixelButton: View {
     let systemImage: String
     let tone: PixelButtonTone
     let action: () -> Void
+    @State private var hapticTrigger = 0
 
     var body: some View {
-        Button(action: action) {
+        Button {
+            hapticTrigger += 1
+            action()
+        } label: {
             Label(title, systemImage: systemImage)
         }
         .buttonStyle(PixelButtonStyle(tone))
+        .sensoryFeedback(.impact(weight: .light, intensity: 0.55), trigger: hapticTrigger)
     }
 }
 
@@ -1159,9 +1244,13 @@ private struct CapabilityButton: View {
     let selected: Bool
     let fill: Color
     let action: () -> Void
+    @State private var hapticTrigger = 0
 
     var body: some View {
-        Button(action: action) {
+        Button {
+            hapticTrigger += 1
+            action()
+        } label: {
             Text(label)
                 .font(WorkshopStyle.mono(.caption, weight: .black))
                 .frame(maxWidth: .infinity)
@@ -1173,6 +1262,7 @@ private struct CapabilityButton: View {
                 }
         }
         .buttonStyle(.plain)
+        .sensoryFeedback(.selection, trigger: hapticTrigger)
     }
 }
 
@@ -1210,6 +1300,12 @@ private struct PixelToast: View {
             .background(WorkshopStyle.surface)
             .overlay(Rectangle().stroke(WorkshopStyle.line, lineWidth: 2))
             .background(Rectangle().fill(WorkshopStyle.line).offset(x: 4, y: 4))
+    }
+}
+
+private extension String {
+    func emptyFallback(_ fallback: String) -> String {
+        isEmpty ? fallback : self
     }
 }
 
