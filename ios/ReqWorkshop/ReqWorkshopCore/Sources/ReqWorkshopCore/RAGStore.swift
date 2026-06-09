@@ -106,12 +106,7 @@ public struct RAGStore: Codable, Sendable {
         let worksheet = try file.parseWorksheet(at: firstPath)
         let rows = worksheet.data?.rows ?? []
         let table = rows.map { row in
-            row.cells.map { cell in
-                if let sharedStrings {
-                    return cell.stringValue(sharedStrings) ?? cell.inlineString?.text ?? cell.value ?? ""
-                }
-                return cell.inlineString?.text ?? cell.value ?? ""
-            }
+            RAGStore.rowValues(from: row.cells, sharedStrings: sharedStrings)
         }
         self.documents = RAGStore.documents(from: table)
     }
@@ -208,9 +203,9 @@ public struct RAGStore: Codable, Sendable {
         return file
     }
 
-    private static func documents(from table: [[String]]) -> [RAGDocument] {
+    static func documents(from table: [[String]]) -> [RAGDocument] {
         guard let headers = table.first else { return [] }
-        let indexByHeader = Dictionary(uniqueKeysWithValues: headers.enumerated().map { ($0.element, $0.offset) })
+        let indexByHeader = indexHeaders(headers)
         func value(_ row: [String], _ header: String) -> String {
             guard let index = indexByHeader[header], index < row.count else { return "" }
             return row[index]
@@ -232,6 +227,35 @@ public struct RAGStore: Codable, Sendable {
                 stepCount: value(row, "任务步骤数量")
             )
         }
+    }
+
+    private static func indexHeaders(_ headers: [String]) -> [String: Int] {
+        var result: [String: Int] = [:]
+        for (offset, rawHeader) in headers.enumerated() {
+            let header = rawHeader.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !header.isEmpty, result[header] == nil else { continue }
+            result[header] = offset
+        }
+        return result
+    }
+
+    private static func rowValues(from cells: [Cell], sharedStrings: SharedStrings?) -> [String] {
+        guard !cells.isEmpty else { return [] }
+        let firstColumn = ColumnReference("A")!
+        var values: [String] = []
+        for cell in cells {
+            let index = firstColumn.distance(to: cell.reference.column)
+            guard index >= 0 else { continue }
+            if index >= values.count {
+                values.append(contentsOf: Array(repeating: "", count: index - values.count + 1))
+            }
+            if let sharedStrings {
+                values[index] = cell.stringValue(sharedStrings) ?? cell.inlineString?.text ?? cell.value ?? ""
+            } else {
+                values[index] = cell.inlineString?.text ?? cell.value ?? ""
+            }
+        }
+        return values
     }
 }
 

@@ -17,6 +17,19 @@ final class RAGAndExportTests: XCTestCase {
         XCTAssertEqual(matches.first?.taskName, "遥控器电池盖扣合")
     }
 
+    func testRAGDocumentsTolerateDuplicateAndBlankHeaders() throws {
+        let table = [
+            ["任务名称", "", "任务步骤描述", "任务名称", "采集设备", "采集模式", "场景域分类", "目标次数", "任务级别", "任务步骤数量"],
+            ["桌面垃圾清理", "", "1. 抓取垃圾 <Grasp（抓取）><8s>", "重复任务名", "乐聚KUAVO", "双臂", "家居家政", "60", "简易", "1"],
+        ]
+
+        let docs = RAGStore.documents(from: table)
+
+        XCTAssertEqual(docs.count, 1)
+        XCTAssertEqual(docs[0].taskName, "桌面垃圾清理")
+        XCTAssertEqual(docs[0].device, "乐聚KUAVO")
+    }
+
     func testExportWritesThreeReadableXLSXSheets() throws {
         let robot = RobotProfile.fixture()
         let row = RequirementRow.fixture(taskName: "预-遥控器电池盖扣合", robot: robot)
