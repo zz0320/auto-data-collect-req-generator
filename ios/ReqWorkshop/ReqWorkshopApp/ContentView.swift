@@ -134,7 +134,7 @@ private struct HomeView: View {
             ) {
                 HStack(alignment: .center, spacing: 14) {
                     WorkshopLogoMark()
-                        .frame(width: 66, height: 66)
+                        .frame(width: 74, height: 74)
                         .pixelFrame(lineWidth: 3, shadow: 4)
                     VStack(alignment: .leading, spacing: 6) {
                         Text("需求生成工坊")
@@ -693,75 +693,139 @@ private struct WorkshopLogoMark: View {
     var body: some View {
         GeometryReader { proxy in
             let size = min(proxy.size.width, proxy.size.height)
+            let line = max(size * 0.03, 1.5)
 
             ZStack {
                 Rectangle()
+                    .fill(WorkshopStyle.bg)
+
+                GridMark()
+                    .stroke(WorkshopStyle.ink.opacity(0.12), lineWidth: max(size * 0.01, 0.7))
+                    .frame(width: size, height: size)
+
+                Rectangle()
                     .fill(WorkshopStyle.paper)
+                    .frame(width: size * 0.76, height: size * 0.74)
+                    .overlay(Rectangle().stroke(WorkshopStyle.line, lineWidth: line))
+                    .position(x: size * 0.50, y: size * 0.54)
+
+                Rectangle()
+                    .fill(WorkshopStyle.yellow)
+                    .frame(width: size * 0.62, height: size * 0.16)
+                    .overlay(Rectangle().stroke(WorkshopStyle.line, lineWidth: line * 0.78))
+                    .position(x: size * 0.44, y: size * 0.26)
+
+                Rectangle()
+                    .fill(WorkshopStyle.red)
+                    .frame(width: size * 0.10, height: size * 0.10)
+                    .overlay(Rectangle().stroke(WorkshopStyle.line, lineWidth: line * 0.62))
+                    .position(x: size * 0.18, y: size * 0.26)
+
+                Rectangle()
+                    .fill(WorkshopStyle.green)
+                    .frame(width: size * 0.10, height: size * 0.10)
+                    .overlay(Rectangle().stroke(WorkshopStyle.line, lineWidth: line * 0.62))
+                    .position(x: size * 0.70, y: size * 0.26)
 
                 Rectangle()
                     .fill(WorkshopStyle.sky)
-                    .frame(width: size * 0.58, height: size * 0.36)
-                    .overlay(Rectangle().stroke(WorkshopStyle.line, lineWidth: 2))
-                    .position(x: size * 0.50, y: size * 0.38)
+                    .frame(width: size * 0.46, height: size * 0.26)
+                    .overlay(Rectangle().stroke(WorkshopStyle.line, lineWidth: line * 0.82))
+                    .position(x: size * 0.43, y: size * 0.47)
 
                 Rectangle()
                     .fill(WorkshopStyle.green)
-                    .frame(width: size * 0.08, height: size * 0.08)
-                    .overlay(Rectangle().stroke(WorkshopStyle.line, lineWidth: 1.4))
-                    .position(x: size * 0.38, y: size * 0.36)
+                    .frame(width: size * 0.07, height: size * 0.07)
+                    .overlay(Rectangle().stroke(WorkshopStyle.line, lineWidth: line * 0.52))
+                    .position(x: size * 0.34, y: size * 0.45)
 
                 Rectangle()
                     .fill(WorkshopStyle.green)
-                    .frame(width: size * 0.08, height: size * 0.08)
-                    .overlay(Rectangle().stroke(WorkshopStyle.line, lineWidth: 1.4))
-                    .position(x: size * 0.62, y: size * 0.36)
+                    .frame(width: size * 0.07, height: size * 0.07)
+                    .overlay(Rectangle().stroke(WorkshopStyle.line, lineWidth: line * 0.52))
+                    .position(x: size * 0.51, y: size * 0.45)
 
                 Rectangle()
                     .fill(WorkshopStyle.yellow)
-                    .frame(width: size * 0.10, height: size * 0.04)
-                    .overlay(Rectangle().stroke(WorkshopStyle.line, lineWidth: 1.3))
-                    .position(x: size * 0.50, y: size * 0.50)
+                    .frame(width: size * 0.12, height: size * 0.04)
+                    .overlay(Rectangle().stroke(WorkshopStyle.line, lineWidth: line * 0.42))
+                    .position(x: size * 0.425, y: size * 0.54)
+
+                Rectangle()
+                    .fill(WorkshopStyle.yellow)
+                    .frame(width: size * 0.09, height: size * 0.26)
+                    .overlay(Rectangle().stroke(WorkshopStyle.line, lineWidth: line * 0.62))
+                    .rotationEffect(.degrees(-22))
+                    .position(x: size * 0.19, y: size * 0.52)
+
+                Rectangle()
+                    .fill(WorkshopStyle.yellow)
+                    .frame(width: size * 0.09, height: size * 0.24)
+                    .overlay(Rectangle().stroke(WorkshopStyle.line, lineWidth: line * 0.62))
+                    .rotationEffect(.degrees(28))
+                    .position(x: size * 0.70, y: size * 0.51)
 
                 Rectangle()
                     .fill(WorkshopStyle.paper)
-                    .frame(width: size * 0.68, height: size * 0.32)
-                    .overlay(Rectangle().stroke(WorkshopStyle.line, lineWidth: 2))
-                    .position(x: size * 0.52, y: size * 0.68)
+                    .frame(width: size * 0.48, height: size * 0.30)
+                    .overlay(Rectangle().stroke(WorkshopStyle.line, lineWidth: line * 0.82))
+                    .position(x: size * 0.52, y: size * 0.70)
 
-                VStack(spacing: size * 0.04) {
-                    Rectangle().fill(WorkshopStyle.blue).frame(width: size * 0.36, height: 2)
-                    Rectangle().fill(WorkshopStyle.red).frame(width: size * 0.28, height: 2)
-                    Rectangle().fill(WorkshopStyle.green).frame(width: size * 0.42, height: 2)
+                VStack(alignment: .leading, spacing: size * 0.035) {
+                    Rectangle().fill(WorkshopStyle.red).frame(width: size * 0.12, height: max(size * 0.025, 1.5))
+                    Rectangle().fill(WorkshopStyle.blue).frame(width: size * 0.32, height: max(size * 0.025, 1.5))
+                    Rectangle().fill(WorkshopStyle.green).frame(width: size * 0.26, height: max(size * 0.025, 1.5))
                 }
-                .position(x: size * 0.55, y: size * 0.68)
+                .position(x: size * 0.54, y: size * 0.69)
 
-                Rectangle()
+                SparkMark()
                     .fill(WorkshopStyle.yellow)
-                    .frame(width: size * 0.10, height: size * 0.25)
-                    .overlay(Rectangle().stroke(WorkshopStyle.line, lineWidth: 1.5))
-                    .rotationEffect(.degrees(-18))
-                    .position(x: size * 0.15, y: size * 0.48)
-
-                Rectangle()
-                    .fill(WorkshopStyle.yellow)
-                    .frame(width: size * 0.10, height: size * 0.25)
-                    .overlay(Rectangle().stroke(WorkshopStyle.line, lineWidth: 1.5))
-                    .rotationEffect(.degrees(18))
-                    .position(x: size * 0.85, y: size * 0.48)
-
-                Rectangle()
-                    .fill(WorkshopStyle.green)
-                    .frame(width: size * 0.08, height: size * 0.08)
-                    .overlay(Rectangle().stroke(WorkshopStyle.line, lineWidth: 1.2))
-                    .position(x: size * 0.50, y: size * 0.13)
+                    .overlay(SparkMark().stroke(WorkshopStyle.line, lineWidth: line * 0.52))
+                    .frame(width: size * 0.18, height: size * 0.18)
+                    .position(x: size * 0.78, y: size * 0.65)
 
                 Rectangle()
                     .fill(WorkshopStyle.line)
-                    .frame(width: 2, height: size * 0.08)
-                    .position(x: size * 0.50, y: size * 0.19)
+                    .frame(width: line * 0.72, height: size * 0.10)
+                    .position(x: size * 0.43, y: size * 0.32)
             }
         }
         .aspectRatio(1, contentMode: .fit)
+    }
+}
+
+private struct GridMark: Shape {
+    func path(in rect: CGRect) -> Path {
+        var path = Path()
+        let step = rect.width / 4
+        for index in 1...3 {
+            let offset = step * CGFloat(index)
+            path.move(to: CGPoint(x: rect.minX + offset, y: rect.minY))
+            path.addLine(to: CGPoint(x: rect.minX + offset, y: rect.maxY))
+            path.move(to: CGPoint(x: rect.minX, y: rect.minY + offset))
+            path.addLine(to: CGPoint(x: rect.maxX, y: rect.minY + offset))
+        }
+        return path
+    }
+}
+
+private struct SparkMark: Shape {
+    func path(in rect: CGRect) -> Path {
+        let cx = rect.midX
+        let cy = rect.midY
+        let long = rect.width * 0.48
+        let short = rect.width * 0.16
+        var path = Path()
+        path.move(to: CGPoint(x: cx, y: cy - long))
+        path.addLine(to: CGPoint(x: cx + short, y: cy - short))
+        path.addLine(to: CGPoint(x: cx + long, y: cy))
+        path.addLine(to: CGPoint(x: cx + short, y: cy + short))
+        path.addLine(to: CGPoint(x: cx, y: cy + long))
+        path.addLine(to: CGPoint(x: cx - short, y: cy + short))
+        path.addLine(to: CGPoint(x: cx - long, y: cy))
+        path.addLine(to: CGPoint(x: cx - short, y: cy - short))
+        path.closeSubpath()
+        return path
     }
 }
 
