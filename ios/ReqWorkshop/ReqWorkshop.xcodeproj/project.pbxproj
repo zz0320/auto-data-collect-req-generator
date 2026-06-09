@@ -15,6 +15,7 @@
 		100000000000000000000006 /* ReqWorkshopCore in Frameworks */ = {isa = PBXBuildFile; productRef = 900000000000000000000002 /* ReqWorkshopCore */; };
 		100000000000000000000007 /* ReqWorkshopTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 200000000000000000000007 /* ReqWorkshopTests.swift */; };
 		100000000000000000000008 /* ReqWorkshopCore in Frameworks */ = {isa = PBXBuildFile; productRef = 900000000000000000000003 /* ReqWorkshopCore */; };
+		100000000000000000000009 /* LaunchScreen.storyboard in Resources */ = {isa = PBXBuildFile; fileRef = 200000000000000000000009 /* LaunchScreen.storyboard */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -26,6 +27,7 @@
 		200000000000000000000006 /* ReqWorkshop.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = ReqWorkshop.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		200000000000000000000007 /* ReqWorkshopTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReqWorkshopTests.swift; sourceTree = "<group>"; };
 		200000000000000000000008 /* ReqWorkshopTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = ReqWorkshopTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		200000000000000000000009 /* LaunchScreen.storyboard */ = {isa = PBXFileReference; lastKnownFileType = file.storyboard; path = LaunchScreen.storyboard; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -73,6 +75,7 @@
 				200000000000000000000002 /* ContentView.swift */,
 				200000000000000000000003 /* AppModel.swift */,
 				200000000000000000000004 /* KeychainStore.swift */,
+				200000000000000000000009 /* LaunchScreen.storyboard */,
 				200000000000000000000005 /* Assets.xcassets */,
 			);
 			path = ReqWorkshopApp;
@@ -174,6 +177,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				100000000000000000000005 /* Assets.xcassets in Resources */,
+				100000000000000000000009 /* LaunchScreen.storyboard in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -362,6 +366,7 @@
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_CFBundleDisplayName = "需求生成工坊";
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.productivity";
+				INFOPLIST_KEY_UILaunchStoryboardName = LaunchScreen;
 				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
@@ -389,6 +394,7 @@
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_CFBundleDisplayName = "需求生成工坊";
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.productivity";
+				INFOPLIST_KEY_UILaunchStoryboardName = LaunchScreen;
 				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
