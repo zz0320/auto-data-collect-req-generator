@@ -11,6 +11,20 @@ public struct BrainstormResult: Equatable, Sendable {
     public var filteredExistingIdeas: [String]
 }
 
+public struct GenerationProgressUpdate: Equatable, Sendable {
+    public var progress: Double
+    public var stepIndex: Int
+    public var detail: String
+
+    public init(progress: Double, stepIndex: Int, detail: String) {
+        self.progress = min(max(progress, 0), 1)
+        self.stepIndex = max(stepIndex, 0)
+        self.detail = detail
+    }
+}
+
+public typealias GenerationProgressHandler = (GenerationProgressUpdate) async -> Void
+
 public struct GenerationEngine {
     public var llmClient: LLMClient
 
@@ -67,9 +81,11 @@ public struct GenerationEngine {
         robots: [RobotProfile],
         phase: TaskPhase,
         ideaCount: Int,
-        ragStore: RAGStore
+        ragStore: RAGStore,
+        progress: GenerationProgressHandler? = nil
     ) async throws -> BrainstormResult {
         guard !robots.isEmpty else { throw GenerationError.validation("请先选择或新增至少一台机器人，再自动脑洞 idea") }
+        await progress?(GenerationProgressUpdate(progress: 0.10, stepIndex: 0, detail: "正在整理机器人能力约束。"))
         let clampedCount = max(1, min(ideaCount, 200))
         let candidateCount = min(200, max(clampedCount, clampedCount + min(clampedCount, 20)))
         let robotText = robots.map {
@@ -93,6 +109,7 @@ public struct GenerationEngine {
                 "任务步骤描述": String(doc.steps.prefix(320)),
             ] as [String: Any]
         })
+        await progress?(GenerationProgressUpdate(progress: 0.30, stepIndex: 1, detail: "已检索存量样例，正在组织 Qwen 上下文。"))
 
         let system = "你是机器人数据采集需求的任务 idea 策划器。你只输出 JSON。必须结合存量数据分布和机器人真实能力提出新 idea；不确定的能力不要假设。"
         let user = """
@@ -123,7 +140,9 @@ public struct GenerationEngine {
         输出 JSON schema：
         {"ideas":["idea 1","idea 2"],"rationale":"一句话说明这些 idea 如何参考了存量数据"}
         """
+        await progress?(GenerationProgressUpdate(progress: 0.56, stepIndex: 2, detail: "Qwen 正在生成点子，数据量越大等待越久。"))
         let parsed = try await llmClient.generateJSON(system: system, user: user, timeoutSeconds: 180)
+        await progress?(GenerationProgressUpdate(progress: 0.86, stepIndex: 3, detail: "正在过滤历史重复 idea。"))
         guard let rawIdeas = parsed["ideas"] as? [Any] else {
             throw GenerationError.validation("Qwen idea 响应缺少 ideas 数组")
         }
@@ -131,12 +150,14 @@ public struct GenerationEngine {
         if cleaned.ideas.isEmpty {
             throw GenerationError.validation("Qwen 返回的 idea 都与存量需求重复，请减少约束或重试。")
         }
-        return BrainstormResult(
+        let result = BrainstormResult(
             ideas: cleaned.ideas,
             rationale: parsed["rationale"] as? String ?? "",
             filteredExistingIdeaCount: cleaned.filtered.count,
             filteredExistingIdeas: Array(cleaned.filtered.prefix(12))
         )
+        await progress?(GenerationProgressUpdate(progress: 1, stepIndex: 4, detail: "自动脑洞完成。"))
+        return result
     }
 
     public func generateRequirements(
@@ -144,11 +165,13 @@ public struct GenerationEngine {
         ideas: [String],
         phase: TaskPhase,
         ragStore: RAGStore,
-        owner: String
+        owner: String,
+        progress: GenerationProgressHandler? = nil
     ) async throws -> [ValidationResult] {
         guard !robots.isEmpty else { throw GenerationError.validation("至少需要输入一台机器人配置") }
         let cleanIdeas = ideas.map(TextUtilities.stripListPrefix).filter { !$0.isEmpty }
         guard !cleanIdeas.isEmpty else { throw GenerationError.validation("请先输入至少一条任务 idea") }
+        await progress?(GenerationProgressUpdate(progress: 0.10, stepIndex: 0, detail: "正在整理机器人、阶段和 idea。"))
 
         let robotText = robots.map {
             "- \($0.summary)\n  允许动作：\(Self.deriveCapabilities($0).allowedActions.joined(separator: ", "))"
@@ -175,6 +198,7 @@ public struct GenerationEngine {
             "actions": Array(ReqConstants.canonicalActions.values),
             "format": "任务步骤描述必须逐行编号，每一行末尾必须包含 <动作（中文）><秒数s>。",
         ])
+        await progress?(GenerationProgressUpdate(progress: 0.34, stepIndex: 1, detail: "已检索 RAG 样例，正在组织字段格式。"))
         let system = "你是机器人数据采集需求表生成器。你只输出 JSON，不要输出 Markdown。"
         let user = """
         请根据机器人配置、任务阶段和新的任务 idea，生成机器人数据采集需求。
@@ -200,10 +224,13 @@ public struct GenerationEngine {
         2. 目标次数必须填写 \(phase.targetTimes)。
         3. 不要生成与存量 RAG 重复或近似重复的任务。
         4. 严格遵守机器人移动、双臂、全身、末端执行器能力边界。
-        5. 只输出 {"tasks":[...]} JSON。
+        5. 数采负责人字段留空，不要填写人名。
+        6. 只输出 {"tasks":[...]} JSON。
         """
 
+        await progress?(GenerationProgressUpdate(progress: 0.58, stepIndex: 2, detail: "Qwen 正在生成需求，保持在本页等待即可。"))
         let parsed = try await llmClient.generateJSON(system: system, user: user, timeoutSeconds: 240)
+        await progress?(GenerationProgressUpdate(progress: 0.82, stepIndex: 3, detail: "正在解析并校验 Qwen 返回结果。"))
         let taskObjects = (parsed["tasks"] as? [[String: Any]])
             ?? (parsed["items"] as? [[String: Any]])
             ?? (parsed["rows"] as? [[String: Any]])
@@ -227,7 +254,9 @@ public struct GenerationEngine {
                 stepCount: Int(doc.stepCount) ?? TextUtilities.lineCount(from: doc.steps)
             )
         }
-        return rows.map { Self.validate(row: $0, robots: robots, phase: phase, existingRows: existingRows) }
+        let validations = rows.map { Self.validate(row: $0, robots: robots, phase: phase, existingRows: existingRows) }
+        await progress?(GenerationProgressUpdate(progress: 1, stepIndex: 4, detail: "需求生成和本地校验完成。"))
+        return validations
     }
 
     public static func validate(
@@ -330,7 +359,7 @@ public struct GenerationEngine {
             category: string("场景域分类").isEmpty ? inferCategory(fallbackIdea) : string("场景域分类"),
             steps: steps,
             targetTimes: phase.targetTimes,
-            owner: owner.isEmpty ? string("数采负责人") : owner,
+            owner: owner,
             machineParameters: string("机器及环境参数").isEmpty ? (robot?.summary ?? "") : string("机器及环境参数"),
             level: string("任务级别").isEmpty ? taskLevel(stepCount: TextUtilities.lineCount(from: steps), actions: TextUtilities.actionKeys(from: steps)) : string("任务级别"),
             stepCount: Int(string("任务步骤数量")) ?? TextUtilities.lineCount(from: steps)

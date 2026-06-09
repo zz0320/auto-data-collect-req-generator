@@ -194,7 +194,7 @@ private struct SetupView: View {
         }
         .fileImporter(isPresented: $importing, allowedContentTypes: [.spreadsheet], allowsMultipleSelection: false) { result in
             if case .success(let urls) = result, let url = urls.first {
-                model.importRAG(from: url)
+                Task { await model.importRAG(from: url) }
             }
         }
         .onDisappear(perform: model.saveSettings)
@@ -253,6 +253,10 @@ private struct RAGConfigPanel: View {
         ) {
             PixelButton(title: "选择 Excel", systemImage: "square.and.arrow.down", tone: .secondary) {
                 importing = true
+            }
+            .disabled(model.isBusy)
+            if let progress = model.progressState, progress.kind == .importExcel {
+                PixelProgress(state: progress)
             }
             LazyVGrid(columns: WorkshopStyle.twoColumns, spacing: 10) {
                 SummaryTile(number: model.ragFileName, title: "文件")
@@ -449,13 +453,13 @@ private struct GenerateView: View {
                     .background(WorkshopStyle.paper)
                     .overlay(Rectangle().stroke(WorkshopStyle.line, lineWidth: 2))
 
-                PixelButton(title: model.isBusy ? "Qwen 生成中..." : "Qwen 自动脑洞 idea", systemImage: "sparkles", tone: .secondary) {
+                PixelButton(title: model.progressState?.kind == .brainstorm && model.progressState?.status == .running ? "Qwen 脑洞中..." : "Qwen 自动脑洞 idea", systemImage: "sparkles", tone: .secondary) {
                     Task { await model.brainstormIdeas() }
                 }
                 .disabled(model.isBusy || !model.apiKeyConfigured)
 
-                if model.isBusy {
-                    PixelProgress(text: "生成中")
+                if let progress = model.progressState, progress.kind == .brainstorm {
+                    PixelProgress(state: progress)
                 }
             }
 
@@ -464,11 +468,6 @@ private struct GenerateView: View {
                     .scrollContentBackground(.hidden)
                     .pixelEditor(minHeight: 220)
                 InfoStrip(title: "识别", value: "\(model.ideas.count) 条")
-            }
-
-            PixelPanel(title: "负责人", headerColor: WorkshopStyle.mint) {
-                TextField("数采负责人", text: $model.owner)
-                    .pixelInput()
             }
 
             PixelPanel(
@@ -482,7 +481,7 @@ private struct GenerateView: View {
                     StatusTile(title: "API", value: model.apiKeyConfigured ? "已配置" : "未配置", ok: model.apiKeyConfigured)
                     StatusTile(title: "Idea", value: "\(model.ideas.count) 条", ok: !model.ideas.isEmpty)
                 }
-                PixelButton(title: model.isBusy ? "Qwen 生成中..." : "生成需求", systemImage: "wand.and.stars", tone: .primary) {
+                PixelButton(title: model.progressState?.kind == .requirements && model.progressState?.status == .running ? "Qwen 生成中..." : "生成需求", systemImage: "wand.and.stars", tone: .primary) {
                     Task {
                         await model.generateRequirements()
                         if !model.validations.isEmpty {
@@ -496,8 +495,8 @@ private struct GenerateView: View {
                         selectedTab = .setup
                     }
                 }
-                if model.isBusy {
-                    PixelProgress(text: "生成中")
+                if let progress = model.progressState, progress.kind == .requirements {
+                    PixelProgress(state: progress)
                 }
             }
         }
@@ -1267,22 +1266,119 @@ private struct CapabilityButton: View {
 }
 
 private struct PixelProgress: View {
-    let text: String
+    let state: WorkProgress
+
+    private var fillColor: Color {
+        state.status == .error ? WorkshopStyle.red : WorkshopStyle.green
+    }
+
+    private var columns: [GridItem] {
+        Array(repeating: GridItem(.flexible(), spacing: 6), count: max(min(state.steps.count, 4), 1))
+    }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text(text)
-                .font(WorkshopStyle.mono(.caption, weight: .black))
-            ProgressView()
-                .progressViewStyle(.linear)
-                .tint(WorkshopStyle.green)
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(alignment: .top, spacing: 12) {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(state.title)
+                        .font(WorkshopStyle.mono(.caption, weight: .black))
+                    Text(state.detail)
+                        .font(WorkshopStyle.mono(.caption2, weight: .bold))
+                        .foregroundStyle(WorkshopStyle.muted)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                Spacer(minLength: 8)
+                Text(state.statusText)
+                    .font(WorkshopStyle.mono(.caption2, weight: .black))
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 5)
+                    .background(state.status == .error ? WorkshopStyle.red : WorkshopStyle.yellow)
+                    .foregroundStyle(state.status == .error ? WorkshopStyle.paper : WorkshopStyle.ink)
+                    .overlay(Rectangle().stroke(WorkshopStyle.line, lineWidth: 2))
+            }
+
+            PixelProgressTrack(value: state.progress, color: fillColor)
+                .frame(height: 18)
+
+            LazyVGrid(columns: columns, spacing: 6) {
+                ForEach(Array(state.steps.enumerated()), id: \.offset) { index, step in
+                    PixelProgressStep(
+                        title: step,
+                        isDone: state.status == .done || index < state.activeStep,
+                        isActive: state.status == .running && index == state.activeStep
+                    )
+                }
+            }
         }
         .padding(12)
-        .background(WorkshopStyle.paper)
+        .background(Color(red: 1.000, green: 0.973, blue: 0.875))
         .overlay(Rectangle().stroke(WorkshopStyle.line, lineWidth: 2))
         .background(Rectangle().fill(WorkshopStyle.line).offset(x: 4, y: 4))
         .padding(.trailing, 4)
         .padding(.bottom, 4)
+    }
+}
+
+private struct PixelProgressTrack: View {
+    let value: Double
+    let color: Color
+
+    var body: some View {
+        GeometryReader { proxy in
+            let width = proxy.size.width * min(max(value, 0), 1)
+            ZStack(alignment: .leading) {
+                Rectangle().fill(WorkshopStyle.paper)
+                ZStack(alignment: .leading) {
+                    Rectangle()
+                        .fill(color)
+                    ProgressStripePattern()
+                }
+                .frame(width: width)
+                .clipped()
+            }
+            .overlay(Rectangle().stroke(WorkshopStyle.line, lineWidth: 2))
+            .animation(.easeInOut(duration: 0.26), value: value)
+        }
+    }
+}
+
+private struct ProgressStripePattern: View {
+    var body: some View {
+        Canvas { context, size in
+            var x: CGFloat = 0
+            while x < size.width {
+                context.fill(
+                    Path(CGRect(x: x, y: 0, width: 7, height: size.height)),
+                    with: .color(WorkshopStyle.paper.opacity(0.28))
+                )
+                x += 16
+            }
+        }
+    }
+}
+
+private struct PixelProgressStep: View {
+    let title: String
+    let isDone: Bool
+    let isActive: Bool
+
+    var body: some View {
+        Text(title)
+            .font(WorkshopStyle.mono(.caption2, weight: .black))
+            .lineLimit(1)
+            .minimumScaleFactor(0.7)
+            .frame(maxWidth: .infinity)
+            .padding(.horizontal, 5)
+            .padding(.vertical, 6)
+            .background(background)
+            .foregroundStyle(isDone ? WorkshopStyle.paper : WorkshopStyle.ink)
+            .overlay(Rectangle().stroke(WorkshopStyle.line, lineWidth: 2))
+    }
+
+    private var background: Color {
+        if isDone { return WorkshopStyle.green }
+        if isActive { return WorkshopStyle.yellow }
+        return WorkshopStyle.paper
     }
 }
 

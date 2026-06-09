@@ -22,6 +22,8 @@ final class AppModel {
     var notice = ""
     var isBusy = false
     var hapticEvent = HapticEvent()
+    var progressState: WorkProgress?
+    @ObservationIgnored private var progressTicker: Task<Void, Never>?
 
     let modelOptions = ["qwen3.7-max", "qwen3-max", "qwen-plus", "qwen-turbo"]
 
@@ -86,25 +88,38 @@ final class AppModel {
 		}
 	}
 
-    func importRAG(from url: URL) {
+    @MainActor
+    func importRAG(from url: URL) async {
+        startProgress(.importExcel)
+        isBusy = true
+        notice = ""
         do {
-            let didAccess = url.startAccessingSecurityScopedResource()
-            defer {
-                if didAccess { url.stopAccessingSecurityScopedResource() }
-            }
-            ragStore = try RAGStore(xlsxURL: url)
-            ragFileName = url.lastPathComponent
+            updateProgress(progress: 0.16, stepIndex: 0, detail: "正在读取 Excel 文件。")
+            let fileName = url.lastPathComponent
+            let importedStore = try await Task.detached(priority: .userInitiated) {
+                let didAccess = url.startAccessingSecurityScopedResource()
+                defer {
+                    if didAccess { url.stopAccessingSecurityScopedResource() }
+                }
+                return try RAGStore(xlsxURL: url)
+            }.value
+            updateProgress(progress: 0.74, stepIndex: 2, detail: "正在构建 RAG 索引和候选机型。")
+            ragStore = importedStore
+            ragFileName = fileName
             validations = []
             let presetCount = ragRobotPresets.count
             notice = presetCount > 0
                 ? "RAG 已导入：\(ragStore.documents.count) 条历史需求，识别 \(presetCount) 个候选机型。"
                 : "RAG 已导入：\(ragStore.documents.count) 条历史需求，未识别到候选机型。"
+            completeProgress(detail: notice, status: .done)
             triggerHaptic(presetCount > 0 ? .success : .warning)
             saveSettings()
         } catch {
             notice = "RAG 导入失败：\(error.localizedDescription)"
+            completeProgress(detail: notice, status: .error)
             triggerHaptic(.error)
         }
+        isBusy = false
     }
 
     func syncRobotsFromRAG() {
@@ -135,9 +150,19 @@ final class AppModel {
 
 	@MainActor
 	func brainstormIdeas() async {
-		await runBusy("自动脑洞完成。") {
+		await runProgress(.brainstorm, fallbackSuccess: "自动脑洞完成。") {
 			let engine = GenerationEngine(llmClient: self.makeClient())
-			let result = try await engine.brainstormIdeas(robots: self.robots, phase: self.phase, ideaCount: self.ideaPlanCount, ragStore: self.ragStore)
+			let result = try await engine.brainstormIdeas(
+                robots: self.robots,
+                phase: self.phase,
+                ideaCount: self.ideaPlanCount,
+                ragStore: self.ragStore,
+                progress: { update in
+                    await MainActor.run {
+                        self.applyGenerationProgress(update)
+                    }
+                }
+            )
 			self.ideasText = result.ideas.joined(separator: "\n")
 			self.notice = result.filteredExistingIdeaCount > 0
 				? "已生成 \(result.ideas.count) 个 idea，过滤 \(result.filteredExistingIdeaCount) 个历史重复项。"
@@ -147,9 +172,20 @@ final class AppModel {
 
 	@MainActor
 	func generateRequirements() async {
-		await runBusy("需求生成完成。") {
+		await runProgress(.requirements, fallbackSuccess: "需求生成完成。") {
 			let engine = GenerationEngine(llmClient: self.makeClient())
-			self.validations = try await engine.generateRequirements(robots: self.robots, ideas: self.ideas, phase: self.phase, ragStore: self.ragStore, owner: self.owner)
+			self.validations = try await engine.generateRequirements(
+                robots: self.robots,
+                ideas: self.ideas,
+                phase: self.phase,
+                ragStore: self.ragStore,
+                owner: "",
+                progress: { update in
+                    await MainActor.run {
+                        self.applyGenerationProgress(update)
+                    }
+                }
+            )
 			self.notice = "已生成 \(self.validations.count) 条，接受 \(self.acceptedCount) 条，拒绝 \(self.rejectedCount) 条。"
 		}
 	}
@@ -248,6 +284,83 @@ final class AppModel {
         isBusy = false
     }
 
+    @MainActor
+    private func runProgress(_ kind: WorkProgressKind, fallbackSuccess: String, operation: @escaping () async throws -> Void) async {
+        startProgress(kind)
+        isBusy = true
+        notice = ""
+        do {
+            try await operation()
+            if notice.isEmpty { notice = fallbackSuccess }
+            completeProgress(detail: notice, status: .done)
+            triggerHaptic(.success)
+            saveSettings()
+        } catch {
+            notice = error.localizedDescription
+            completeProgress(detail: notice, status: .error)
+            triggerHaptic(.error)
+        }
+        isBusy = false
+    }
+
+    @MainActor
+    private func startProgress(_ kind: WorkProgressKind) {
+        progressTicker?.cancel()
+        progressState = WorkProgress.profile(for: kind)
+        let startedAt = Date()
+        progressTicker = Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: 1_400_000_000)
+                guard !Task.isCancelled else { return }
+                await MainActor.run {
+                    self?.tickProgress(startedAt: startedAt)
+                }
+            }
+        }
+    }
+
+    @MainActor
+    private func tickProgress(startedAt: Date) {
+        guard var state = progressState, state.status == .running else { return }
+        let increment = state.progress < 0.40 ? 0.08 : state.progress < 0.70 ? 0.04 : 0.015
+        state.progress = min(0.88, state.progress + increment)
+        let active = Int((state.progress * Double(max(state.steps.count, 1))).rounded(.down))
+        state.activeStep = min(max(state.activeStep, active), max(state.steps.count - 1, 0))
+        let elapsed = Date().timeIntervalSince(startedAt)
+        if elapsed > 45, state.kind != .importExcel {
+            state.detail = "模型仍在处理，数据量越大等待越久。请勿退出当前页面。"
+        } else if elapsed > 8, state.kind == .importExcel {
+            state.detail = "Excel 较大时解析会慢一些，正在继续处理。"
+        }
+        progressState = state
+    }
+
+    @MainActor
+    private func applyGenerationProgress(_ update: GenerationProgressUpdate) {
+        updateProgress(progress: update.progress, stepIndex: update.stepIndex, detail: update.detail)
+    }
+
+    @MainActor
+    private func updateProgress(progress: Double, stepIndex: Int, detail: String) {
+        guard var state = progressState else { return }
+        state.progress = max(state.progress, min(max(progress, 0), 1))
+        state.activeStep = max(state.activeStep, min(stepIndex, state.steps.count))
+        state.detail = detail
+        progressState = state
+    }
+
+    @MainActor
+    private func completeProgress(detail: String, status: WorkProgressStatus) {
+        progressTicker?.cancel()
+        progressTicker = nil
+        guard var state = progressState else { return }
+        state.status = status
+        state.progress = status == .done ? 1 : max(state.progress, 0.88)
+        state.activeStep = status == .done ? state.steps.count : min(state.activeStep, max(state.steps.count - 1, 0))
+        state.detail = detail
+        progressState = state
+    }
+
     func triggerHaptic(_ kind: HapticKind) {
         hapticEvent = HapticEvent(id: hapticEvent.id + 1, kind: kind)
     }
@@ -274,4 +387,73 @@ enum HapticKind: Equatable {
 struct HapticEvent: Equatable {
     var id = 0
     var kind: HapticKind = .impact
+}
+
+enum WorkProgressKind: Equatable {
+    case importExcel
+    case brainstorm
+    case requirements
+}
+
+enum WorkProgressStatus: Equatable {
+    case running
+    case done
+    case error
+}
+
+struct WorkProgress: Equatable {
+    var kind: WorkProgressKind
+    var title: String
+    var detail: String
+    var steps: [String]
+    var progress: Double
+    var activeStep: Int
+    var status: WorkProgressStatus
+
+    var percent: Int {
+        Int((min(max(progress, 0), 1) * 100).rounded())
+    }
+
+    var statusText: String {
+        switch status {
+        case .running: "进行中 \(percent)%"
+        case .done: "完成"
+        case .error: "失败"
+        }
+    }
+
+    static func profile(for kind: WorkProgressKind) -> WorkProgress {
+        switch kind {
+        case .importExcel:
+            WorkProgress(
+                kind: kind,
+                title: "正在导入 Excel",
+                detail: "正在读取工作簿，准备构建 RAG 索引。",
+                steps: ["读取文件", "解析表头", "构建索引", "识别机型"],
+                progress: 0.08,
+                activeStep: 0,
+                status: .running
+            )
+        case .brainstorm:
+            WorkProgress(
+                kind: kind,
+                title: "Qwen 正在生成点子",
+                detail: "正在整理机器人能力、存量样例和任务阶段。",
+                steps: ["整理约束", "检索样例", "调用模型", "写入 idea"],
+                progress: 0.08,
+                activeStep: 0,
+                status: .running
+            )
+        case .requirements:
+            WorkProgress(
+                kind: kind,
+                title: "Qwen 正在生成需求",
+                detail: "正在汇总机器人、idea、RAG 样例和字段格式。",
+                steps: ["整理输入", "检索 RAG", "调用模型", "校验结果"],
+                progress: 0.08,
+                activeStep: 0,
+                status: .running
+            )
+        }
+    }
 }

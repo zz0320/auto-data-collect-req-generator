@@ -62,6 +62,54 @@ final class GenerationEngineTests: XCTestCase {
         XCTAssertTrue(client.lastUserPrompt.contains("存量文档提炼的机器人能力画像"))
     }
 
+    func testBrainstormAndRequirementGenerationReportProgressMilestones() async throws {
+        let robot = RobotProfile.fixture()
+        let client = StubLLMClient(json: [
+            "ideas": ["遥控器电池盖扣合"],
+            "rationale": "参考历史能力发散",
+            "tasks": [
+                [
+                    "任务名称": "预-遥控器电池盖扣合",
+                    "任务简述": "将遥控器电池盖对准并按压扣合",
+                    "采集设备": "乐聚KUAVO",
+                    "采集模式": "双臂",
+                    "场景域分类": "工业制造",
+                    "任务步骤描述": "1. 拿起电池盖 <Pick（拿起）><8s>\n2. 对准并扣合 <Press（按压）><8s>",
+                    "目标次数": 60,
+                    "机器及环境参数": robot.summary,
+                    "任务级别": "简易",
+                    "任务步骤数量": 2,
+                ],
+            ],
+        ])
+        let engine = GenerationEngine(llmClient: client)
+        var brainstormProgress: [GenerationProgressUpdate] = []
+        var requirementProgress: [GenerationProgressUpdate] = []
+
+        _ = try await engine.brainstormIdeas(
+            robots: [robot],
+            phase: .pretrain,
+            ideaCount: 1,
+            ragStore: RAGStore(),
+            progress: { update in brainstormProgress.append(update) }
+        )
+        _ = try await engine.generateRequirements(
+            robots: [robot],
+            ideas: ["遥控器电池盖扣合"],
+            phase: .pretrain,
+            ragStore: RAGStore(),
+            owner: "",
+            progress: { update in requirementProgress.append(update) }
+        )
+
+        XCTAssertEqual(brainstormProgress.first?.stepIndex, 0)
+        XCTAssertEqual(brainstormProgress.last?.progress, 1)
+        XCTAssertTrue(brainstormProgress.contains { $0.detail.contains("Qwen") })
+        XCTAssertEqual(requirementProgress.first?.stepIndex, 0)
+        XCTAssertEqual(requirementProgress.last?.progress, 1)
+        XCTAssertTrue(requirementProgress.contains { $0.detail.contains("校验") })
+    }
+
     func testGenerateRequirementsParsesQwenRowsAndAppliesLocalValidation() async throws {
         let robot = RobotProfile.fixture()
         let client = StubLLMClient(json: [
@@ -74,6 +122,7 @@ final class GenerationEngineTests: XCTestCase {
                     "场景域分类": "工业制造",
                     "任务步骤描述": "1. 拿起电池盖 <Pick（拿起）><8s>\n2. 对准并扣合 <Press（按压）><8s>",
                     "目标次数": 999,
+                    "数采负责人": "张三",
                     "机器及环境参数": robot.summary,
                     "任务级别": "简易",
                     "任务步骤数量": 2,
@@ -93,6 +142,7 @@ final class GenerationEngineTests: XCTestCase {
         XCTAssertEqual(validations.count, 1)
         XCTAssertEqual(validations[0].status, .accepted)
         XCTAssertEqual(validations[0].row.targetTimes, 60)
+        XCTAssertEqual(validations[0].row.owner, "")
         XCTAssertTrue(client.lastUserPrompt.contains("新的任务 idea"))
     }
 }
