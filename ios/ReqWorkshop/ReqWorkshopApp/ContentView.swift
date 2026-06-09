@@ -80,27 +80,21 @@ private struct HomeView: View {
     @Bindable var model: AppModel
 
     var body: some View {
-        WorkshopScreen(title: "工作台", subtitle: "需求生成工坊") {
+        WorkshopScreen(title: "工作台") {
             PixelPanel(
                 title: "需求生成工坊",
-                subtitle: "本地原生 iOS 版，不依赖 Python 服务",
                 headerColor: WorkshopStyle.yellow,
                 trailing: {
                     Meter(value: "\(model.acceptedCount)", label: "接受")
                 }
             ) {
                 HStack(alignment: .center, spacing: 14) {
-                    Image("DemandLogo")
-                        .resizable()
-                        .interpolation(.none)
+                    WorkshopLogoMark()
                         .frame(width: 66, height: 66)
                         .pixelFrame(lineWidth: 3, shadow: 4)
                     VStack(alignment: .leading, spacing: 6) {
                         Text("需求生成工坊")
                             .font(WorkshopStyle.mono(.title2, weight: .black))
-                        Text("沿用 Web 版像素风、网格纸背景和硬边框")
-                            .foregroundStyle(WorkshopStyle.muted)
-                            .font(WorkshopStyle.mono(.footnote, weight: .semibold))
                     }
                 }
 
@@ -112,7 +106,7 @@ private struct HomeView: View {
                 }
             }
 
-            PixelPanel(title: "生成队列", subtitle: "本地状态实时同步", headerColor: WorkshopStyle.mint) {
+            PixelPanel(title: "生成队列", headerColor: WorkshopStyle.mint) {
                 LazyVGrid(columns: WorkshopStyle.twoColumns, spacing: 10) {
                     SummaryTile(number: "\(model.ideas.count)", title: "Idea")
                     SummaryTile(number: "\(model.validations.count)", title: "结果")
@@ -129,8 +123,8 @@ private struct RAGView: View {
     @State private var importing = false
 
     var body: some View {
-        WorkshopScreen(title: "RAG", subtitle: "本地 Excel 数据源") {
-            PixelPanel(title: "RAG 数据源", subtitle: "只支持 .xlsx 文件", headerColor: WorkshopStyle.mint) {
+        WorkshopScreen(title: "RAG") {
+            PixelPanel(title: "RAG 数据源", headerColor: WorkshopStyle.mint) {
                 PixelButton(title: "选择 RAG Excel", systemImage: "square.and.arrow.down", tone: .secondary) {
                     importing = true
                 }
@@ -143,7 +137,7 @@ private struct RAGView: View {
                 }
             }
 
-            PixelPanel(title: "样例", subtitle: "导入后展示前 12 条", headerColor: WorkshopStyle.yellow) {
+            PixelPanel(title: "样例", headerColor: WorkshopStyle.yellow) {
                 if model.ragStore.documents.isEmpty {
                     PixelEmpty(text: "还没有导入 RAG Excel")
                 } else {
@@ -171,10 +165,9 @@ private struct RobotsView: View {
     @Bindable var model: AppModel
 
     var body: some View {
-        WorkshopScreen(title: "机器人", subtitle: "能力配置要清楚地区分具备 / 不具备") {
+        WorkshopScreen(title: "机器人") {
             PixelPanel(
                 title: "机器人配置",
-                subtitle: "能力边界会进入 prompt 和本地校验",
                 headerColor: WorkshopStyle.yellow,
                 trailing: {
                     PixelButton(title: "新增", systemImage: "plus", tone: .secondary, action: model.addRobot)
@@ -245,8 +238,8 @@ private struct IdeasView: View {
     @Bindable var model: AppModel
 
     var body: some View {
-        WorkshopScreen(title: "Idea", subtitle: "每行一条，保持表格感") {
-            PixelPanel(title: "阶段", subtitle: "目标次数固定", headerColor: WorkshopStyle.yellow) {
+        WorkshopScreen(title: "Idea") {
+            PixelPanel(title: "阶段", headerColor: WorkshopStyle.yellow) {
                 Picker("任务阶段", selection: $model.phase) {
                     ForEach(TaskPhase.allCases, id: \.self) { phase in
                         Text("\(phase.label) · \(phase.targetTimes)").tag(phase)
@@ -258,7 +251,7 @@ private struct IdeasView: View {
                 .overlay(Rectangle().stroke(WorkshopStyle.line, lineWidth: 2))
             }
 
-            PixelPanel(title: "自动脑洞", subtitle: "Qwen 调用过程会显示本地进度", headerColor: WorkshopStyle.mint) {
+            PixelPanel(title: "自动脑洞", headerColor: WorkshopStyle.mint) {
                 Stepper("想生成 \(model.ideaPlanCount) 类 idea", value: $model.ideaPlanCount, in: 1...200)
                     .font(WorkshopStyle.mono(.body, weight: .bold))
                     .padding(10)
@@ -271,19 +264,19 @@ private struct IdeasView: View {
                 .disabled(model.isBusy || !model.apiKeyConfigured)
 
                 if model.isBusy {
-                    PixelProgress(text: "正在结合 RAG 和机器人能力生成 idea")
+                    PixelProgress(text: "生成中")
                 }
             }
 
-            PixelPanel(title: "任务 idea（每行一条）", subtitle: "一行一条，不写编号也可以", headerColor: WorkshopStyle.yellow) {
+            PixelPanel(title: "任务 idea", headerColor: WorkshopStyle.yellow) {
                 TextEditor(text: $model.ideasText)
                     .scrollContentBackground(.hidden)
                     .pixelEditor(minHeight: 220)
-                InfoStrip(title: "识别", value: "\(model.ideas.count) 个 idea，本次输出需求条数自动匹配")
+                InfoStrip(title: "识别", value: "\(model.ideas.count) 条")
             }
 
-            PixelPanel(title: "负责人", subtitle: "可留空", headerColor: WorkshopStyle.mint) {
-                TextField("数采负责人，可留空", text: $model.owner)
+            PixelPanel(title: "负责人", headerColor: WorkshopStyle.mint) {
+                TextField("数采负责人", text: $model.owner)
                     .pixelInput()
             }
         }
@@ -295,10 +288,9 @@ private struct ResultsView: View {
     @Bindable var model: AppModel
 
     var body: some View {
-        WorkshopScreen(title: "结果", subtitle: "生成、编辑、导出 Excel") {
+        WorkshopScreen(title: "结果") {
             PixelPanel(
                 title: "结果队列",
-                subtitle: "生成后在这里编辑需求，再导出 Excel",
                 headerColor: WorkshopStyle.mint,
                 trailing: {
                     Meter(value: "\(model.validations.count)", label: "条")
@@ -310,7 +302,7 @@ private struct ResultsView: View {
                 .disabled(model.isBusy || !model.apiKeyConfigured || model.ideas.isEmpty)
 
                 if model.isBusy {
-                    PixelProgress(text: "正在生成需求并执行本地重复 / 能力校验")
+                    PixelProgress(text: "生成中")
                 }
 
                 HStack(spacing: 10) {
@@ -327,7 +319,7 @@ private struct ResultsView: View {
                 }
             }
 
-            PixelPanel(title: "结果 \(model.acceptedCount) 接受 / \(model.rejectedCount) 拒绝", subtitle: "拒绝原因直接展示", headerColor: WorkshopStyle.yellow) {
+            PixelPanel(title: "结果 \(model.acceptedCount) 接受 / \(model.rejectedCount) 拒绝", headerColor: WorkshopStyle.yellow) {
                 if model.validations.isEmpty {
                     PixelEmpty(text: "还没有生成结果")
                 } else {
@@ -370,8 +362,8 @@ private struct SettingsView: View {
     @Bindable var model: AppModel
 
     var body: some View {
-        WorkshopScreen(title: "设置", subtitle: "API 配置显式管理") {
-            PixelPanel(title: "DashScope API", subtitle: "Key 只存 Keychain", headerColor: WorkshopStyle.yellow) {
+        WorkshopScreen(title: "设置") {
+            PixelPanel(title: "DashScope API", headerColor: WorkshopStyle.yellow) {
                 LabeledPixelField("API Key") {
                     SecureField("API Key", text: $model.apiKeyDraft)
                         .pixelInput()
@@ -400,9 +392,6 @@ private struct SettingsView: View {
                 .disabled(model.isBusy)
             }
 
-            PixelPanel(title: "本地模式", subtitle: "不调用 Python 服务器", headerColor: WorkshopStyle.mint) {
-                InfoStrip(title: "存储", value: "API Key 保存在本机 Keychain；RAG、机器人配置和导出文件仅保存在本机。")
-            }
         }
         .onDisappear(perform: model.saveSettings)
     }
@@ -458,10 +447,10 @@ private struct GridPaperBackground: View {
 
 private struct WorkshopScreen<Content: View>: View {
     let title: String
-    let subtitle: String
+    let subtitle: String?
     private let content: () -> Content
 
-    init(title: String, subtitle: String, @ViewBuilder content: @escaping () -> Content) {
+    init(title: String, subtitle: String? = nil, @ViewBuilder content: @escaping () -> Content) {
         self.title = title
         self.subtitle = subtitle
         self.content = content
@@ -475,9 +464,11 @@ private struct WorkshopScreen<Content: View>: View {
                     VStack(alignment: .leading, spacing: 5) {
                         Text(title)
                             .font(WorkshopStyle.mono(.largeTitle, weight: .black))
-                        Text(subtitle)
-                            .font(WorkshopStyle.mono(.footnote, weight: .bold))
-                            .foregroundStyle(WorkshopStyle.muted)
+                        if let subtitle {
+                            Text(subtitle)
+                                .font(WorkshopStyle.mono(.footnote, weight: .bold))
+                                .foregroundStyle(WorkshopStyle.muted)
+                        }
                     }
                     .padding(.top, 14)
 
@@ -526,6 +517,82 @@ private struct PixelTabBar: View {
         .background(Rectangle().fill(WorkshopStyle.line).offset(x: 5, y: 5))
         .padding(.trailing, 5)
         .padding(.bottom, 5)
+    }
+}
+
+private struct WorkshopLogoMark: View {
+    var body: some View {
+        GeometryReader { proxy in
+            let size = min(proxy.size.width, proxy.size.height)
+
+            ZStack {
+                Rectangle()
+                    .fill(WorkshopStyle.paper)
+
+                Rectangle()
+                    .fill(WorkshopStyle.sky)
+                    .frame(width: size * 0.58, height: size * 0.36)
+                    .overlay(Rectangle().stroke(WorkshopStyle.line, lineWidth: 2))
+                    .position(x: size * 0.50, y: size * 0.38)
+
+                Rectangle()
+                    .fill(WorkshopStyle.green)
+                    .frame(width: size * 0.08, height: size * 0.08)
+                    .overlay(Rectangle().stroke(WorkshopStyle.line, lineWidth: 1.4))
+                    .position(x: size * 0.38, y: size * 0.36)
+
+                Rectangle()
+                    .fill(WorkshopStyle.green)
+                    .frame(width: size * 0.08, height: size * 0.08)
+                    .overlay(Rectangle().stroke(WorkshopStyle.line, lineWidth: 1.4))
+                    .position(x: size * 0.62, y: size * 0.36)
+
+                Rectangle()
+                    .fill(WorkshopStyle.yellow)
+                    .frame(width: size * 0.10, height: size * 0.04)
+                    .overlay(Rectangle().stroke(WorkshopStyle.line, lineWidth: 1.3))
+                    .position(x: size * 0.50, y: size * 0.50)
+
+                Rectangle()
+                    .fill(WorkshopStyle.paper)
+                    .frame(width: size * 0.68, height: size * 0.32)
+                    .overlay(Rectangle().stroke(WorkshopStyle.line, lineWidth: 2))
+                    .position(x: size * 0.52, y: size * 0.68)
+
+                VStack(spacing: size * 0.04) {
+                    Rectangle().fill(WorkshopStyle.blue).frame(width: size * 0.36, height: 2)
+                    Rectangle().fill(WorkshopStyle.red).frame(width: size * 0.28, height: 2)
+                    Rectangle().fill(WorkshopStyle.green).frame(width: size * 0.42, height: 2)
+                }
+                .position(x: size * 0.55, y: size * 0.68)
+
+                Rectangle()
+                    .fill(WorkshopStyle.yellow)
+                    .frame(width: size * 0.10, height: size * 0.25)
+                    .overlay(Rectangle().stroke(WorkshopStyle.line, lineWidth: 1.5))
+                    .rotationEffect(.degrees(-18))
+                    .position(x: size * 0.15, y: size * 0.48)
+
+                Rectangle()
+                    .fill(WorkshopStyle.yellow)
+                    .frame(width: size * 0.10, height: size * 0.25)
+                    .overlay(Rectangle().stroke(WorkshopStyle.line, lineWidth: 1.5))
+                    .rotationEffect(.degrees(18))
+                    .position(x: size * 0.85, y: size * 0.48)
+
+                Rectangle()
+                    .fill(WorkshopStyle.green)
+                    .frame(width: size * 0.08, height: size * 0.08)
+                    .overlay(Rectangle().stroke(WorkshopStyle.line, lineWidth: 1.2))
+                    .position(x: size * 0.50, y: size * 0.13)
+
+                Rectangle()
+                    .fill(WorkshopStyle.line)
+                    .frame(width: 2, height: size * 0.08)
+                    .position(x: size * 0.50, y: size * 0.19)
+            }
+        }
+        .aspectRatio(1, contentMode: .fit)
     }
 }
 

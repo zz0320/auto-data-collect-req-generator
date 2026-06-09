@@ -201,7 +201,7 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/sh;
-			shellScript = "/usr/bin/xattr -cr \"$TARGET_BUILD_DIR/$FULL_PRODUCT_NAME\" || true\n";
+			shellScript = "/usr/bin/xattr -cr \"$SRCROOT/ReqWorkshopApp/LaunchScreen.storyboard\" || true\n/usr/bin/xattr -cr \"$SRCROOT/ReqWorkshopApp/Assets.xcassets\" || true\n/usr/bin/xattr -cr \"$TARGET_BUILD_DIR/$FULL_PRODUCT_NAME\" || true\n";
 		};
 		600000000000000000000005 /* Strip Extended Attributes */ = {
 			isa = PBXShellScriptBuildPhase;
@@ -220,7 +220,7 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/sh;
-			shellScript = "/usr/bin/xattr -cr \"$TARGET_BUILD_DIR/$FULL_PRODUCT_NAME\" || true\n";
+			shellScript = "/usr/bin/xattr -cr \"$SRCROOT/ReqWorkshopApp/LaunchScreen.storyboard\" || true\n/usr/bin/xattr -cr \"$SRCROOT/ReqWorkshopApp/Assets.xcassets\" || true\n/usr/bin/xattr -cr \"$TARGET_BUILD_DIR/$FULL_PRODUCT_NAME\" || true\n";
 		};
 /* End PBXShellScriptBuildPhase section */
 
@@ -360,6 +360,7 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ARCHS = arm64;
+				"CODE_SIGNING_ALLOWED[sdk=iphonesimulator*]" = NO;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = "";
@@ -388,6 +389,7 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ARCHS = arm64;
+				"CODE_SIGNING_ALLOWED[sdk=iphonesimulator*]" = NO;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = "";
@@ -415,6 +417,7 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ARCHS = arm64;
+				"CODE_SIGNING_ALLOWED[sdk=iphonesimulator*]" = NO;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = "";
@@ -439,6 +442,7 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ARCHS = arm64;
+				"CODE_SIGNING_ALLOWED[sdk=iphonesimulator*]" = NO;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = "";
