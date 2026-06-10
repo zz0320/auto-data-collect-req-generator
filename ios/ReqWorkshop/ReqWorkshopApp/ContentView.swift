@@ -11,12 +11,12 @@ struct ContentView: View {
             switch selectedTab {
             case .home:
                 HomeView(model: model, selectedTab: $selectedTab)
-            case .setup:
-                SetupView(model: model, selectedTab: $selectedTab)
             case .generate:
                 GenerateView(model: model, selectedTab: $selectedTab)
             case .results:
                 ResultsView(model: model, selectedTab: $selectedTab)
+            case .settings:
+                SettingsView(model: model, selectedTab: $selectedTab)
             }
         }
         .background(WorkshopStyle.bg.ignoresSafeArea())
@@ -57,37 +57,37 @@ struct ContentView: View {
 
 private enum WorkshopTab: CaseIterable {
     case home
-    case setup
     case generate
     case results
+    case settings
 
     var title: String {
         switch self {
         case .home: "首页"
-        case .setup: "准备"
         case .generate: "生成"
         case .results: "结果"
+        case .settings: "设置"
         }
     }
 
     var icon: String {
         switch self {
         case .home: "house.fill"
-        case .setup: "slider.horizontal.3"
         case .generate: "sparkles"
         case .results: "tablecells"
+        case .settings: "gearshape.fill"
         }
     }
 }
 
 private enum WorkflowStep: CaseIterable {
-    case setup
+    case settings
     case generate
     case results
 
     var tab: WorkshopTab {
         switch self {
-        case .setup: .setup
+        case .settings: .settings
         case .generate: .generate
         case .results: .results
         }
@@ -95,7 +95,7 @@ private enum WorkflowStep: CaseIterable {
 
     var number: String {
         switch self {
-        case .setup: "1"
+        case .settings: "1"
         case .generate: "2"
         case .results: "3"
         }
@@ -103,7 +103,7 @@ private enum WorkflowStep: CaseIterable {
 
     var title: String {
         switch self {
-        case .setup: "准备"
+        case .settings: "设置"
         case .generate: "生成"
         case .results: "结果"
         }
@@ -111,8 +111,8 @@ private enum WorkflowStep: CaseIterable {
 
     func isDone(_ model: AppModel) -> Bool {
         switch self {
-        case .setup:
-            model.apiKeyConfigured && !model.ragStore.documents.isEmpty && !model.robots.isEmpty
+        case .settings:
+            model.apiKeyConfigured && model.hasRAGSource && model.hasUsableRobots
         case .generate:
             !model.ideas.isEmpty
         case .results:
@@ -122,14 +122,62 @@ private enum WorkflowStep: CaseIterable {
 
     func value(_ model: AppModel) -> String {
         switch self {
-        case .setup:
-            let ready = [model.apiKeyConfigured, !model.ragStore.documents.isEmpty, !model.robots.isEmpty].filter { $0 }.count
+        case .settings:
+            let ready = [model.apiKeyConfigured, model.hasRAGSource, model.hasUsableRobots].filter { $0 }.count
             return "\(ready)/3"
         case .generate:
             return "\(model.ideas.count) 条"
         case .results:
             return "\(model.validations.count) 条"
         }
+    }
+}
+
+private enum WorkshopNextAction {
+    case saveAPIKey
+    case importRAG
+    case confirmRobots
+    case brainstormIdeas
+    case generateRequirements
+    case reviewResults
+
+    var title: String {
+        switch self {
+        case .saveAPIKey: "配置 API"
+        case .importRAG: "导入 RAG"
+        case .confirmRobots: "确认机器人"
+        case .brainstormIdeas: "填写 idea"
+        case .generateRequirements: "生成需求"
+        case .reviewResults: "查看结果"
+        }
+    }
+
+    var detail: String {
+        switch self {
+        case .saveAPIKey: "先保存 DashScope API Key，后续自动脑洞和生成都会使用它。"
+        case .importRAG: "导入历史需求 Excel 后，系统会构建本地 RAG，并提取机器人能力画像。"
+        case .confirmRobots: "从候选机型选择或手动新增，并确认末端、单双臂、移动和全身能力。"
+        case .brainstormIdeas: "输入每行一个 idea，或让 Qwen 基于 RAG 自动发散。"
+        case .generateRequirements: "检查阶段、目标次数和 idea 数量，然后调用 Qwen 生成需求。"
+        case .reviewResults: "编辑生成结果，重新校验后导出 Excel。"
+        }
+    }
+
+    var tab: WorkshopTab {
+        switch self {
+        case .saveAPIKey, .importRAG, .confirmRobots: .settings
+        case .brainstormIdeas, .generateRequirements: .generate
+        case .reviewResults: .results
+        }
+    }
+
+    static func current(for model: AppModel) -> WorkshopNextAction {
+        if !model.apiKeyConfigured { return .saveAPIKey }
+        if !model.hasRAGSource { return .importRAG }
+        if !model.hasUsableRobots { return .confirmRobots }
+        if model.ideas.isEmpty { return .brainstormIdeas }
+        if model.validations.isEmpty { return .generateRequirements }
+        return .reviewResults
     }
 }
 
@@ -159,13 +207,16 @@ private struct HomeView: View {
                 WorkflowStrip(model: model, selectedTab: $selectedTab)
             }
 
+            NextActionPanel(model: model, selectedTab: $selectedTab)
+
             PixelPanel(title: "当前状态", headerColor: WorkshopStyle.mint) {
                 LazyVGrid(columns: WorkshopStyle.twoColumns, spacing: 10) {
-                    StatusTile(title: "API 配置", value: model.apiKeyConfigured ? "\(model.qwenModel) 已配置" : "未配置", ok: model.apiKeyConfigured)
-                    StatusTile(title: "RAG 数据源", value: "\(model.ragFileName) · \(model.ragStore.documents.count) 条", ok: !model.ragStore.documents.isEmpty)
-                    StatusTile(title: "机器人", value: "\(model.robots.count) 台", ok: !model.robots.isEmpty)
+                    StatusTile(title: "模型 API", value: model.apiKeyConfigured ? "\(model.qwenModel) 已配置" : "未配置", ok: model.apiKeyConfigured)
+                    StatusTile(title: "知识库 RAG", value: "\(model.ragFileName) · \(model.ragStore.documents.count) 条", ok: !model.ragStore.documents.isEmpty)
+                    StatusTile(title: "机器人能力", value: "\(model.robots.count) 台", ok: model.hasUsableRobots)
                     StatusTile(title: "任务阶段", value: "\(model.phase.label) · \(model.phase.targetTimes) 次", ok: true)
                 }
+                ReadinessChecklist(model: model)
             }
 
             PixelPanel(title: "输出", headerColor: WorkshopStyle.yellow) {
@@ -180,14 +231,87 @@ private struct HomeView: View {
     }
 }
 
-private struct SetupView: View {
+private struct NextActionPanel: View {
+    @Bindable var model: AppModel
+    @Binding var selectedTab: WorkshopTab
+
+    private var action: WorkshopNextAction {
+        WorkshopNextAction.current(for: model)
+    }
+
+    var body: some View {
+        PixelPanel(
+            title: "下一步",
+            headerColor: WorkshopStyle.sky,
+            trailing: {
+                Meter(value: "\(model.setupBlockers.isEmpty ? 3 : 3 - model.setupBlockers.count)/3", label: "配置")
+            }
+        ) {
+            PixelCard(background: model.setupBlockers.isEmpty ? WorkshopStyle.paper : WorkshopStyle.errorPaper) {
+                Text(action.title)
+                    .font(WorkshopStyle.mono(.headline, weight: .black))
+                Text(action.detail)
+                    .font(WorkshopStyle.mono(.caption, weight: .bold))
+                    .foregroundStyle(WorkshopStyle.muted)
+                    .fixedSize(horizontal: false, vertical: true)
+                PixelButton(title: action.title, systemImage: "arrow.right", tone: .primary) {
+                    selectedTab = action.tab
+                }
+            }
+        }
+    }
+}
+
+private struct ReadinessChecklist: View {
+    @Bindable var model: AppModel
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            ChecklistRow(title: "API Key", detail: model.apiKeyConfigured ? "已保存到 Keychain" : "缺少 DashScope API Key", ok: model.apiKeyConfigured)
+            ChecklistRow(title: "RAG Excel", detail: model.hasRAGSource ? "\(model.ragStore.documents.count) 条历史需求" : "尚未导入历史需求表", ok: model.hasRAGSource)
+            ChecklistRow(title: "机器人能力", detail: model.hasUsableRobots ? "\(model.robots.count) 台可用机器人" : "需要名称和可操作末端", ok: model.hasUsableRobots)
+        }
+    }
+}
+
+private struct ChecklistRow: View {
+    let title: String
+    let detail: String
+    let ok: Bool
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Image(systemName: ok ? "checkmark" : "exclamationmark")
+                .font(.system(size: 10, weight: .black))
+                .frame(width: 22, height: 22)
+                .background(ok ? WorkshopStyle.green : WorkshopStyle.yellow)
+                .foregroundStyle(ok ? WorkshopStyle.paper : WorkshopStyle.ink)
+                .overlay(Rectangle().stroke(WorkshopStyle.line, lineWidth: 2))
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title)
+                    .font(WorkshopStyle.mono(.caption, weight: .black))
+                Text(detail)
+                    .font(WorkshopStyle.mono(.caption2, weight: .bold))
+                    .foregroundStyle(WorkshopStyle.muted)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .padding(10)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(WorkshopStyle.paper)
+        .overlay(Rectangle().stroke(WorkshopStyle.line, lineWidth: 2))
+    }
+}
+
+private struct SettingsView: View {
     @Bindable var model: AppModel
     @Binding var selectedTab: WorkshopTab
     @State private var importing = false
 
     var body: some View {
-        WorkshopScreen(title: "准备") {
+        WorkshopScreen(title: "设置", subtitle: "模型、知识库和机器人能力") {
             WorkflowStrip(model: model, selectedTab: $selectedTab)
+            SettingsStatusPanel(model: model)
             APIConfigPanel(model: model)
             RAGConfigPanel(model: model, importing: $importing)
             RobotConfigPanel(model: model)
@@ -201,15 +325,43 @@ private struct SetupView: View {
     }
 }
 
+private struct SettingsStatusPanel: View {
+    @Bindable var model: AppModel
+
+    var body: some View {
+        PixelPanel(title: "配置总览", headerColor: WorkshopStyle.sky) {
+            LazyVGrid(columns: WorkshopStyle.twoColumns, spacing: 10) {
+                StatusTile(title: "模型 API", value: model.apiKeyConfigured ? model.qwenModel : "未配置", ok: model.apiKeyConfigured)
+                StatusTile(title: "知识库 RAG", value: "\(model.ragStore.documents.count) 条", ok: model.hasRAGSource)
+                StatusTile(title: "机器人能力", value: "\(model.robots.count) 台", ok: model.hasUsableRobots)
+                StatusTile(title: "生成环境", value: model.setupBlockers.isEmpty ? "可用" : "\(model.setupBlockers.count) 项待配置", ok: model.setupBlockers.isEmpty)
+            }
+            if !model.setupBlockers.isEmpty {
+                BlockerList(blockers: model.setupBlockers)
+            }
+        }
+    }
+}
+
 private struct APIConfigPanel: View {
     @Bindable var model: AppModel
 
     var body: some View {
-        PixelPanel(title: "API 配置", headerColor: WorkshopStyle.yellow) {
+        PixelPanel(title: "模型 API", headerColor: WorkshopStyle.yellow) {
+            LazyVGrid(columns: WorkshopStyle.twoColumns, spacing: 10) {
+                StatusTile(title: "Key", value: model.apiKeyConfigured ? "已保存" : "未保存", ok: model.apiKeyConfigured)
+                StatusTile(title: "模型", value: model.qwenModel, ok: !model.qwenModel.isEmpty)
+            }
             LabeledPixelField("API Key") {
                 SecureField("API Key", text: $model.apiKeyDraft)
                     .pixelInput()
             }
+            InfoStrip(
+                title: "提示",
+                value: model.apiKeyConfigured
+                    ? "留空会保留当前 Key；输入新 Key 并保存即可替换。"
+                    : "Key 仅存入本机 Keychain，不会写入工程文件。"
+            )
             LabeledPixelField("模型") {
                 Picker("", selection: $model.qwenModel) {
                     ForEach(model.modelOptions, id: \.self, content: Text.init)
@@ -229,11 +381,9 @@ private struct APIConfigPanel: View {
                 PixelButton(title: "测试连接", systemImage: "network", tone: .secondary) {
                     Task { await model.testConnection() }
                 }
-                .disabled(model.isBusy)
+                .disabled(model.isBusy || (!model.apiKeyConfigured && model.apiKeyDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty))
                 PixelButton(title: "清除 Key", systemImage: "trash", tone: .danger, action: model.clearAPIKey)
-            }
-            if model.apiKeyConfigured {
-                InfoStrip(title: "状态", value: "\(model.qwenModel) 已配置")
+                    .disabled(model.isBusy || !model.apiKeyConfigured)
             }
         }
     }
@@ -245,16 +395,20 @@ private struct RAGConfigPanel: View {
 
     var body: some View {
         PixelPanel(
-            title: "RAG 数据源",
+            title: "知识库 RAG",
             headerColor: WorkshopStyle.mint,
             trailing: {
                 Meter(value: "\(model.ragStore.documents.count)", label: "条")
             }
         ) {
-            PixelButton(title: "选择 Excel", systemImage: "square.and.arrow.down", tone: .secondary) {
+            PixelButton(title: "上传 Excel", systemImage: "square.and.arrow.down", tone: .secondary) {
                 importing = true
             }
             .disabled(model.isBusy)
+            InfoStrip(
+                title: "用途",
+                value: "RAG Excel 会自动提取字段格式、历史动作、机器人能力画像和重复校验依据。"
+            )
             if let progress = model.progressState, progress.kind == .importExcel {
                 PixelProgress(state: progress)
             }
@@ -266,7 +420,7 @@ private struct RAGConfigPanel: View {
                 InfoStrip(title: "常见设备", value: model.ragStore.summary.topDevices.map(\.name).joined(separator: "、"))
             }
             if !model.ragRobotPresets.isEmpty {
-                InfoStrip(title: "候选机型", value: model.ragRobotPresets.map(\.name).joined(separator: "、"))
+                InfoStrip(title: "已提取能力", value: model.ragRobotPresets.map(\.name).joined(separator: "、"))
                 PixelButton(title: "同步全部", systemImage: "arrow.triangle.2.circlepath", tone: .secondary, action: model.syncRobotsFromRAG)
             }
             if model.ragStore.documents.isEmpty {
@@ -292,14 +446,15 @@ private struct RobotConfigPanel: View {
 
     var body: some View {
         PixelPanel(
-            title: "机器人配置",
+            title: "机器人能力",
             headerColor: WorkshopStyle.yellow,
             trailing: {
                 PixelButton(title: "新增", systemImage: "plus", tone: .secondary, action: model.addRobot)
             }
         ) {
+            InfoStrip(title: "用途", value: "机器人能力会约束生成边界；系统会从 RAG 文件自动提取，你也可以在这里人工修正。")
             if !model.ragStore.documents.isEmpty {
-                InfoStrip(title: "RAG", value: "先选择候选机型，再确认能力。")
+                InfoStrip(title: "RAG", value: "机器人能力已从上传文件提取；这里用于人工确认和修正。")
             }
             if !model.ragRobotPresets.isEmpty {
                 LazyVGrid(columns: WorkshopStyle.twoColumns, spacing: 10) {
@@ -433,6 +588,7 @@ private struct GenerateView: View {
     var body: some View {
         WorkshopScreen(title: "生成") {
             WorkflowStrip(model: model, selectedTab: $selectedTab)
+            GenerationReadinessPanel(model: model, selectedTab: $selectedTab)
 
             PixelPanel(title: "阶段", headerColor: WorkshopStyle.yellow) {
                 Picker("任务阶段", selection: $model.phase) {
@@ -444,6 +600,7 @@ private struct GenerateView: View {
                 .padding(3)
                 .background(WorkshopStyle.paper)
                 .overlay(Rectangle().stroke(WorkshopStyle.line, lineWidth: 2))
+                InfoStrip(title: "目标次数", value: "\(model.phase.label)单条任务固定 \(model.phase.targetTimes) 次；生成条数由有效 idea 行数决定。")
             }
 
             PixelPanel(title: "自动脑洞", headerColor: WorkshopStyle.mint) {
@@ -456,7 +613,10 @@ private struct GenerateView: View {
                 PixelButton(title: model.progressState?.kind == .brainstorm && model.progressState?.status == .running ? "Qwen 脑洞中..." : "Qwen 自动脑洞 idea", systemImage: "sparkles", tone: .secondary) {
                     Task { await model.brainstormIdeas() }
                 }
-                .disabled(model.isBusy || !model.apiKeyConfigured)
+                .disabled(!model.canBrainstormIdeas)
+                if !model.brainstormBlockers.isEmpty {
+                    BlockerList(blockers: model.brainstormBlockers)
+                }
 
                 if let progress = model.progressState, progress.kind == .brainstorm {
                     PixelProgress(state: progress)
@@ -467,8 +627,17 @@ private struct GenerateView: View {
                 TextEditor(text: $model.ideasText)
                     .scrollContentBackground(.hidden)
                     .pixelEditor(minHeight: 220)
-                InfoStrip(title: "识别", value: "\(model.ideas.count) 条")
+                LazyVGrid(columns: WorkshopStyle.twoColumns, spacing: 10) {
+                    SummaryTile(number: "\(model.ideas.count)", title: "本次输出需求")
+                    SummaryTile(number: "\(model.phase.targetTimes)", title: "单任务目标次数")
+                }
+                LabeledPixelField("数采负责人") {
+                    TextField("可留空", text: $model.owner)
+                        .pixelInput()
+                }
             }
+
+            ReviewSummaryPanel(model: model, selectedTab: $selectedTab)
 
             PixelPanel(
                 title: "需求生成",
@@ -479,6 +648,8 @@ private struct GenerateView: View {
             ) {
                 LazyVGrid(columns: WorkshopStyle.twoColumns, spacing: 10) {
                     StatusTile(title: "API", value: model.apiKeyConfigured ? "已配置" : "未配置", ok: model.apiKeyConfigured)
+                    StatusTile(title: "RAG", value: "\(model.ragStore.documents.count) 条", ok: model.hasRAGSource)
+                    StatusTile(title: "机器人", value: "\(model.robots.count) 台", ok: model.hasUsableRobots)
                     StatusTile(title: "Idea", value: "\(model.ideas.count) 条", ok: !model.ideas.isEmpty)
                 }
                 PixelButton(title: model.progressState?.kind == .requirements && model.progressState?.status == .running ? "Qwen 生成中..." : "生成需求", systemImage: "wand.and.stars", tone: .primary) {
@@ -489,10 +660,11 @@ private struct GenerateView: View {
                         }
                     }
                 }
-                .disabled(model.isBusy || !model.apiKeyConfigured || model.ideas.isEmpty)
-                if !model.apiKeyConfigured {
-                    PixelButton(title: "去准备", systemImage: "arrow.right", tone: .neutral) {
-                        selectedTab = .setup
+                .disabled(!model.canGenerateRequirements)
+                if !model.generationBlockers.isEmpty {
+                    BlockerList(blockers: model.generationBlockers)
+                    PixelButton(title: "去设置", systemImage: "gearshape", tone: .neutral) {
+                        selectedTab = .settings
                     }
                 }
                 if let progress = model.progressState, progress.kind == .requirements {
@@ -504,9 +676,94 @@ private struct GenerateView: View {
     }
 }
 
+private struct GenerationReadinessPanel: View {
+    @Bindable var model: AppModel
+    @Binding var selectedTab: WorkshopTab
+
+    var body: some View {
+        PixelPanel(title: "生成就绪度", headerColor: WorkshopStyle.sky) {
+            LazyVGrid(columns: WorkshopStyle.twoColumns, spacing: 10) {
+                StatusTile(title: "API", value: model.apiKeyConfigured ? model.qwenModel : "未配置", ok: model.apiKeyConfigured)
+                StatusTile(title: "RAG", value: "\(model.ragStore.documents.count) 条", ok: model.hasRAGSource)
+                StatusTile(title: "机器人", value: "\(model.robots.count) 台", ok: model.hasUsableRobots)
+                StatusTile(title: "Idea", value: "\(model.ideas.count) 条", ok: !model.ideas.isEmpty)
+            }
+            if !model.setupBlockers.isEmpty {
+                BlockerList(blockers: model.setupBlockers)
+                PixelButton(title: "打开设置", systemImage: "gearshape", tone: .neutral) {
+                    selectedTab = .settings
+                }
+            }
+        }
+    }
+}
+
+private struct ReviewSummaryPanel: View {
+    @Bindable var model: AppModel
+    @Binding var selectedTab: WorkshopTab
+
+    var body: some View {
+        PixelPanel(title: "生成审阅", headerColor: WorkshopStyle.sky) {
+            InfoStrip(
+                title: "计划",
+                value: "\(model.phase.label) · \(model.ideas.count) 条需求 · 单任务目标次数固定 \(model.phase.targetTimes) 次"
+            )
+            if model.robots.isEmpty {
+                PixelEmpty(text: "还没有机器人能力配置")
+            } else {
+                ForEach(model.robots) { robot in
+                    PixelCard {
+                        Text(robot.name)
+                            .font(WorkshopStyle.mono(.headline, weight: .black))
+                        Text("\(robot.arms.rawValue) · \(robot.endEffector) · \(robot.mobile ? "可移动" : "固定工位") · \(robot.wholeBody ? "全身" : "非全身")")
+                            .font(WorkshopStyle.mono(.caption, weight: .bold))
+                            .foregroundStyle(WorkshopStyle.muted)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+            }
+            PixelButton(title: "编辑机器人能力", systemImage: "gearshape", tone: .neutral) {
+                selectedTab = .settings
+            }
+            if !model.ideas.isEmpty {
+                InfoStrip(title: "Idea 前几条", value: model.ideas.prefix(5).joined(separator: "；"))
+            }
+        }
+    }
+}
+
+private struct BlockerList: View {
+    let blockers: [String]
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            ForEach(blockers, id: \.self) { blocker in
+                ChecklistRow(title: "待完成", detail: blocker, ok: false)
+            }
+        }
+    }
+}
+
+private enum ResultFilter: String, CaseIterable, Identifiable {
+    case all = "全部"
+    case accepted = "接受"
+    case rejected = "拒绝"
+
+    var id: String { rawValue }
+
+    func includes(_ status: ValidationStatus) -> Bool {
+        switch self {
+        case .all: true
+        case .accepted: status == .accepted
+        case .rejected: status == .rejected
+        }
+    }
+}
+
 private struct ResultsView: View {
     @Bindable var model: AppModel
     @Binding var selectedTab: WorkshopTab
+    @State private var filter: ResultFilter = .all
 
     var body: some View {
         WorkshopScreen(title: "结果") {
@@ -519,11 +776,19 @@ private struct ResultsView: View {
                     Meter(value: "\(model.validations.count)", label: "条")
                 }
             ) {
+                LazyVGrid(columns: WorkshopStyle.twoColumns, spacing: 10) {
+                    SummaryTile(number: "\(model.acceptedCount)", title: "接受")
+                    SummaryTile(number: "\(model.rejectedCount)", title: "拒绝")
+                }
                 HStack(spacing: 10) {
+                    PixelButton(title: "重新校验", systemImage: "checklist", tone: .neutral) {
+                        model.revalidateResults()
+                    }
+                    .disabled(model.validations.isEmpty)
                     PixelButton(title: "导出 Excel", systemImage: "square.and.arrow.up", tone: .secondary) {
                         model.exportXLSX()
                     }
-                    .disabled(model.validations.isEmpty)
+                    .disabled(!model.canExportXLSX)
                     if let url = model.exportedURL {
                         ShareLink(item: url) {
                             Label("分享 Excel", systemImage: "arrow.up.doc")
@@ -535,6 +800,8 @@ private struct ResultsView: View {
                     PixelButton(title: "去生成", systemImage: "arrow.left", tone: .neutral) {
                         selectedTab = .generate
                     }
+                } else {
+                    InfoStrip(title: "导出规则", value: "导出前会按当前编辑内容重新校验；拒绝项只进入校验日志，不进入生成结果表。")
                 }
             }
 
@@ -542,37 +809,106 @@ private struct ResultsView: View {
                 if model.validations.isEmpty {
                     PixelEmpty(text: "还没有生成结果")
                 } else {
+                    Picker("筛选结果", selection: $filter) {
+                        ForEach(ResultFilter.allCases) { item in
+                            Text(item.rawValue).tag(item)
+                        }
+                    }
+                    .pickerStyle(.segmented)
+                    .padding(3)
+                    .background(WorkshopStyle.paper)
+                    .overlay(Rectangle().stroke(WorkshopStyle.line, lineWidth: 2))
+
                     ForEach($model.validations) { $validation in
-                        PixelCard(background: validation.status == .accepted ? WorkshopStyle.paper : WorkshopStyle.errorPaper) {
-                            HStack(alignment: .top) {
-                                TextField("任务名称", text: $validation.row.taskName)
-                                    .font(WorkshopStyle.mono(.headline, weight: .black))
-                                    .pixelInput()
-                                Text(validation.status == .accepted ? "接受" : "拒绝")
-                                    .font(WorkshopStyle.mono(.caption, weight: .black))
-                                    .padding(.horizontal, 9)
-                                    .padding(.vertical, 8)
-                                    .background(validation.status == .accepted ? WorkshopStyle.green : WorkshopStyle.red)
-                                    .foregroundStyle(WorkshopStyle.paper)
-                                    .overlay(Rectangle().stroke(WorkshopStyle.line, lineWidth: 2))
-                            }
-                            LabeledPixelField("任务简述") {
-                                TextField("任务简述", text: $validation.row.brief, axis: .vertical)
-                                    .lineLimit(2...4)
-                                    .pixelInput(minHeight: 68)
-                            }
-                            LabeledPixelField("任务步骤描述") {
-                                TextEditor(text: $validation.row.steps)
-                                    .scrollContentBackground(.hidden)
-                                    .pixelEditor(minHeight: 150)
-                            }
-                            if !validation.errors.isEmpty {
-                                InfoStrip(title: "拒绝原因", value: validation.errors.joined(separator: "\n"), tone: .danger)
-                            }
+                        if filter.includes(validation.status) {
+                            RequirementResultCard(validation: $validation)
                         }
                     }
                 }
             }
+        }
+    }
+}
+
+private struct RequirementResultCard: View {
+    @Binding var validation: ValidationResult
+
+    var body: some View {
+        PixelCard(background: validation.status == .accepted ? WorkshopStyle.paper : WorkshopStyle.errorPaper) {
+            HStack(alignment: .top) {
+                TextField("任务名称", text: $validation.row.taskName)
+                    .font(WorkshopStyle.mono(.headline, weight: .black))
+                    .pixelInput()
+                Text(validation.status == .accepted ? "接受" : "拒绝")
+                    .font(WorkshopStyle.mono(.caption, weight: .black))
+                    .padding(.horizontal, 9)
+                    .padding(.vertical, 8)
+                    .background(validation.status == .accepted ? WorkshopStyle.green : WorkshopStyle.red)
+                    .foregroundStyle(WorkshopStyle.paper)
+                    .overlay(Rectangle().stroke(WorkshopStyle.line, lineWidth: 2))
+            }
+            LabeledPixelField("任务简述") {
+                TextField("任务简述", text: $validation.row.brief, axis: .vertical)
+                    .lineLimit(2...4)
+                    .pixelInput(minHeight: 68)
+            }
+            RequirementMetadataEditor(row: $validation.row)
+            LabeledPixelField("任务步骤描述") {
+                TextEditor(text: $validation.row.steps)
+                    .scrollContentBackground(.hidden)
+                    .pixelEditor(minHeight: 150)
+            }
+            if !validation.errors.isEmpty {
+                InfoStrip(title: "拒绝原因", value: validation.errors.joined(separator: "\n"), tone: .danger)
+            }
+            if !validation.warnings.isEmpty {
+                InfoStrip(title: "提示", value: validation.warnings.joined(separator: "\n"))
+            }
+        }
+    }
+}
+
+private struct RequirementMetadataEditor: View {
+    @Binding var row: RequirementRow
+
+    var body: some View {
+        LazyVGrid(columns: WorkshopStyle.twoColumns, spacing: 10) {
+            LabeledPixelField("采集设备") {
+                TextField("采集设备", text: $row.device)
+                    .pixelInput()
+            }
+            LabeledPixelField("采集模式") {
+                Picker("", selection: $row.mode) {
+                    ForEach(["双臂", "单臂_右", "单臂_左"], id: \.self) { mode in
+                        Text(mode).tag(mode)
+                    }
+                }
+                .labelsHidden()
+                .pickerStyle(.menu)
+                .pixelInput()
+            }
+            LabeledPixelField("场景域分类") {
+                TextField("场景域分类", text: $row.category)
+                    .pixelInput()
+            }
+            LabeledPixelField("任务级别") {
+                TextField("任务级别", text: $row.level)
+                    .pixelInput()
+            }
+            LabeledPixelField("数采负责人") {
+                TextField("数采负责人", text: $row.owner)
+                    .pixelInput()
+            }
+            LabeledPixelField("任务步骤数量") {
+                Text("\(row.stepCount)")
+                    .pixelInput()
+            }
+        }
+        InfoStrip(title: "固定目标次数", value: "\(row.targetTimes) 次；重新校验会按当前任务阶段修正。")
+        LabeledPixelField("机器及环境参数") {
+            TextField("机器及环境参数", text: $row.machineParameters, axis: .vertical)
+                .lineLimit(2...5)
+                .pixelInput(minHeight: 70)
         }
     }
 }

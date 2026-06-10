@@ -55,13 +55,70 @@ final class AppModel {
         ragRobotPresets.map(\.profile)
     }
 
+    var hasRAGSource: Bool {
+        !ragStore.documents.isEmpty
+    }
+
+    var hasUsableRobots: Bool {
+        robots.contains { robot in
+            let hasName = !robot.brand.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                || !robot.model.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            return hasName && robot.hasManipulator
+        }
+    }
+
+    var setupBlockers: [String] {
+        var blockers: [String] = []
+        if !apiKeyConfigured {
+            blockers.append("先保存 DashScope API Key")
+        }
+        if !hasRAGSource {
+            blockers.append("先导入 RAG Excel")
+        }
+        if !hasUsableRobots {
+            blockers.append("至少配置一台有名称和可操作末端的机器人")
+        }
+        return blockers
+    }
+
+    var brainstormBlockers: [String] {
+        setupBlockers
+    }
+
+    var generationBlockers: [String] {
+        var blockers = setupBlockers
+        if ideas.isEmpty {
+            blockers.append("至少输入一条任务 idea")
+        }
+        return blockers
+    }
+
+    var canBrainstormIdeas: Bool {
+        !isBusy && brainstormBlockers.isEmpty
+    }
+
+    var canGenerateRequirements: Bool {
+        !isBusy && generationBlockers.isEmpty
+    }
+
+    var canExportXLSX: Bool {
+        !isBusy && !validations.isEmpty
+    }
+
     func refreshAPIKeyState() {
         apiKeyConfigured = ((try? KeychainStore.loadAPIKey()) ?? "").isEmpty == false
     }
 
     func saveAPIKey() {
+        let trimmed = apiKeyDraft.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            notice = apiKeyConfigured ? "已保留当前 Key；输入新 Key 后再保存即可替换。" : "请输入 DashScope API Key。"
+            triggerHaptic(.warning)
+            saveSettings()
+            return
+        }
         do {
-            try KeychainStore.saveAPIKey(apiKeyDraft)
+            try KeychainStore.saveAPIKey(trimmed)
             apiKeyDraft = ""
             refreshAPIKeyState()
             notice = "API Key 已保存到本机 Keychain。"
@@ -82,9 +139,17 @@ final class AppModel {
 
 	@MainActor
 	func testConnection() async {
-		await runBusy("连接测试通过。") {
+        let draftKey = apiKeyDraft.trimmingCharacters(in: .whitespacesAndNewlines)
+		await runBusy(draftKey.isEmpty ? "连接测试通过。" : "临时 Key 连接测试通过，保存后才会用于生成。") {
+            let apiKey = draftKey
 			let client = self.makeClient()
-			_ = try await client.generateJSON(system: "你是 API 连通性测试器，只输出 JSON。", user: #"请只输出 {"ok": true}，不要添加解释。"#, timeoutSeconds: 20)
+            let testClient = DashScopeClient(
+                apiKeyProvider: { apiKey.isEmpty ? try KeychainStore.loadAPIKey() : apiKey },
+                model: client.model,
+                endpoint: client.endpoint,
+                session: client.session
+            )
+			_ = try await testClient.generateJSON(system: "你是 API 连通性测试器，只输出 JSON。", user: #"请只输出 {"ok": true}，不要添加解释。"#, timeoutSeconds: 20)
 		}
 	}
 
@@ -107,12 +172,13 @@ final class AppModel {
             ragStore = importedStore
             ragFileName = fileName
             validations = []
-            let presetCount = ragRobotPresets.count
-            notice = presetCount > 0
-                ? "RAG 已导入：\(ragStore.documents.count) 条历史需求，识别 \(presetCount) 个候选机型。"
-                : "RAG 已导入：\(ragStore.documents.count) 条历史需求，未识别到候选机型。"
+            exportedURL = nil
+            let syncedCount = replaceRobotsFromRAG()
+            notice = syncedCount > 0
+                ? "RAG 已导入：\(ragStore.documents.count) 条历史需求，已从文件提取并填入 \(syncedCount) 台机器人能力。"
+                : "RAG 已导入：\(ragStore.documents.count) 条历史需求，未识别到可用机器人能力。"
             completeProgress(detail: notice, status: .done)
-            triggerHaptic(presetCount > 0 ? .success : .warning)
+            triggerHaptic(syncedCount > 0 ? .success : .warning)
             saveSettings()
         } catch {
             notice = "RAG 导入失败：\(error.localizedDescription)"
@@ -124,6 +190,7 @@ final class AppModel {
 
     func syncRobotsFromRAG() {
         let syncedCount = replaceRobotsFromRAG()
+        exportedURL = nil
         notice = syncedCount > 0
             ? "已从 RAG 重新同步 \(syncedCount) 台机器人。"
             : "当前 RAG 没有可同步的机器人画像。"
@@ -143,6 +210,7 @@ final class AppModel {
             robots.append(preset.profile)
         }
         validations = []
+        exportedURL = nil
         notice = "已选择机型：\(preset.name)，可继续确认能力。"
         triggerHaptic(.selection)
         saveSettings()
@@ -150,6 +218,11 @@ final class AppModel {
 
 	@MainActor
 	func brainstormIdeas() async {
+        guard brainstormBlockers.isEmpty else {
+            notice = brainstormBlockers.first ?? "请先完成配置。"
+            triggerHaptic(.warning)
+            return
+        }
 		await runProgress(.brainstorm, fallbackSuccess: "自动脑洞完成。") {
 			let engine = GenerationEngine(llmClient: self.makeClient())
 			let result = try await engine.brainstormIdeas(
@@ -172,6 +245,11 @@ final class AppModel {
 
 	@MainActor
 	func generateRequirements() async {
+        guard generationBlockers.isEmpty else {
+            notice = generationBlockers.first ?? "请先完成配置。"
+            triggerHaptic(.warning)
+            return
+        }
 		await runProgress(.requirements, fallbackSuccess: "需求生成完成。") {
 			let engine = GenerationEngine(llmClient: self.makeClient())
 			self.validations = try await engine.generateRequirements(
@@ -179,36 +257,66 @@ final class AppModel {
                 ideas: self.ideas,
                 phase: self.phase,
                 ragStore: self.ragStore,
-                owner: "",
+                owner: self.owner,
                 progress: { update in
                     await MainActor.run {
                         self.applyGenerationProgress(update)
                     }
                 }
             )
+            self.exportedURL = nil
 			self.notice = "已生成 \(self.validations.count) 条，接受 \(self.acceptedCount) 条，拒绝 \(self.rejectedCount) 条。"
 		}
 	}
 
     func exportXLSX() {
+        revalidateResults()
         do {
             let url = FileManager.default.temporaryDirectory.appendingPathComponent("generated_data_requirements_\(Int(Date().timeIntervalSince1970)).xlsx")
             try XLSXExporter().export(validations: validations, robots: robots, to: url)
             exportedURL = url
-            notice = "Excel 已生成，可通过系统分享导出。"
+            notice = "Excel 已生成：接受 \(acceptedCount) 条，拒绝 \(rejectedCount) 条。"
+            triggerHaptic(acceptedCount > 0 ? .success : .warning)
         } catch {
             notice = "导出失败：\(error.localizedDescription)"
+            triggerHaptic(.error)
         }
+    }
+
+    func revalidateResults() {
+        guard !validations.isEmpty else { return }
+        exportedURL = nil
+        let existingRows = ragStore.documents.map { doc in
+            RequirementRow(
+                taskName: doc.taskName,
+                brief: doc.brief,
+                device: doc.device,
+                mode: doc.mode,
+                category: doc.category,
+                steps: doc.steps,
+                targetTimes: Int(doc.targetTimes) ?? phase.targetTimes,
+                machineParameters: doc.machineParameters,
+                level: doc.level,
+                stepCount: Int(doc.stepCount) ?? Self.lineCount(from: doc.steps)
+            )
+        }
+        validations = validations.map { validation in
+            GenerationEngine.validate(row: validation.row, robots: robots, phase: phase, existingRows: existingRows)
+        }
+        notice = "已重新校验：接受 \(acceptedCount) 条，拒绝 \(rejectedCount) 条。"
+        triggerHaptic(rejectedCount == 0 ? .success : .warning)
     }
 
     func addRobot() {
         robots.append(RobotProfile(brand: "", model: "", endEffector: "夹爪", arms: .dual, mobile: false, wholeBody: false, notes: ""))
+        exportedURL = nil
         triggerHaptic(.impact)
     }
 
     func removeRobots(at offsets: IndexSet) {
         robots.remove(atOffsets: offsets)
         if robots.isEmpty { addRobot() }
+        exportedURL = nil
     }
 
     @discardableResult
@@ -217,6 +325,7 @@ final class AppModel {
         guard !suggested.isEmpty else { return 0 }
         robots = suggested
         validations = []
+        exportedURL = nil
         return suggested.count
     }
 
@@ -239,6 +348,13 @@ final class AppModel {
 
     private func normalizedRobotName(_ robot: RobotProfile) -> String {
         robot.name.lowercased().filter { $0.isLetter || $0.isNumber }
+    }
+
+    private static func lineCount(from steps: String) -> Int {
+        steps
+            .split(whereSeparator: \.isNewline)
+            .filter { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+            .count
     }
 
     func saveSettings() {

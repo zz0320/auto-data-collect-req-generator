@@ -340,18 +340,18 @@ public struct RAGStore: Codable, Sendable {
     }
 
     private static func inferMobile(from docs: [RAGDocument]) -> Bool {
+        let text = capabilityText(from: docs)
+        if text.range(of: #"不具备移动|无移动|固定工位|非移动|不能移动"#, options: .regularExpression) != nil { return false }
         let actions = Set(docs.flatMap(\.actions))
         if !actions.intersection(ReqConstants.mobileActions).isEmpty { return true }
-        let text = capabilityText(from: docs)
-        if text.range(of: #"不具备移动|无移动|固定工位|不能移动"#, options: .regularExpression) != nil { return false }
         return text.range(of: #"具备移动|移动底盘|导航|巡检|跨房间|搬运|货架往返"#, options: .regularExpression) != nil
     }
 
     private static func inferWholeBody(from docs: [RAGDocument]) -> Bool {
+        let text = capabilityText(from: docs)
+        if text.range(of: #"不具备全身|无全身|非全身|不假设全身"#, options: .regularExpression) != nil { return false }
         let actions = Set(docs.flatMap(\.actions))
         if !actions.intersection(ReqConstants.wholeBodyActions).isEmpty { return true }
-        let text = capabilityText(from: docs)
-        if text.range(of: #"不具备全身|无全身|不假设全身"#, options: .regularExpression) != nil { return false }
         return text.range(of: #"具备全身|全身能力|蹲下|伸展|升降"#, options: .regularExpression) != nil
     }
 
